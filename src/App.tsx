@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Bell, ChevronDown, Search, Settings2, UserCircle } from 'lucide-react';
+import { Bell, ChevronDown, Search, UserCircle } from 'lucide-react';
 import { Sidebar } from '@/components/Sidebar';
 import type { Page, AppMode } from '@/components/Sidebar';
 import { Dashboard } from '@/pages/Dashboard';
@@ -12,11 +12,15 @@ import { BrokerSearch } from '@/pages/BrokerSearch';
 import { Statistics } from '@/pages/Statistics';
 import { Sales } from '@/pages/Sales';
 import { supabase } from '@/lib/supabase';
+import type { DraftSeed } from '@/lib/draft_seed';
+import { analyzeSourceUrl } from '@/lib/source_intake';
+import { MOBILE_BG_FIELD_MAP } from '@/lib/mobile_bg_field_map';
 
 function App() {
   const [page, setPage] = useState<Page>('vehicles');
   const [mode, setMode] = useState<AppMode>('admin');
   const [selectedVehicle, setSelectedVehicle] = useState<number | null>(null);
+  const [draftToOpen, setDraftToOpen] = useState<string | null>(null);
   const [conflictCount, setConflictCount] = useState(0);
 
   useEffect(() => {
@@ -27,15 +31,77 @@ function App() {
     loadCount();
   }, [page]);
 
-  function handleNavigate(nextPage: Page) { setPage(nextPage); setSelectedVehicle(null); }
+  function handleNavigate(nextPage: Page) { setPage(nextPage); setSelectedVehicle(null); if (nextPage !== 'imports') setDraftToOpen(null); }
   function handleSelectVehicle(id: number) { setSelectedVehicle(id); }
+  async function handleCreateDraft(seed: DraftSeed) {
+    if (!seed.sourceUrl) {
+      window.alert('За този автомобил няма линк към корейска или канадска обява.');
+      return;
+    }
+    try {
+      const intake = analyzeSourceUrl(seed.sourceUrl);
+      const { data: draft, error: draftError } = await supabase.from('mobile_bg_drafts').insert({
+        catalog_permanent_id: seed.catalogPermanentId,
+        title: seed.title,
+        status: 'DRAFT',
+        source_type: intake.sourceType,
+        source_url: intake.sourceUrl,
+        source_listing_id: intake.sourceListingId,
+        intake_origin: 'CATALOG',
+        extraction_status: 'SOURCE_PENDING',
+        source_domain: intake.sourceDomain,
+        created_by: 'Росен',
+      }).select().single();
+      if (draftError) throw draftError;
+
+      const fieldRows = MOBILE_BG_FIELD_MAP
+        .filter(field => field.section !== 'extras')
+        .filter(field => seed.fields[field.key])
+        .map(field => ({
+          draft_id: draft.id,
+          field_key: field.key,
+          mobile_bg_label: field.mobile_bg_label,
+          our_db_key: field.our_db_key,
+          value: seed.fields[field.key],
+          field_type: field.field_type,
+          source: seed.fieldSources[field.key] || field.source,
+          proof: seed.sourceUrl,
+          validation_status: 'pending',
+          filled_at: new Date().toISOString(),
+          is_manual_edit: false,
+        }));
+      if (fieldRows.length) {
+        const { error } = await supabase.from('mobile_bg_draft_fields').insert(fieldRows);
+        if (error) throw error;
+      }
+
+      const { error: jobError } = await supabase.from('source_listing_jobs').insert({
+        draft_id: draft.id,
+        source_type: intake.sourceType,
+        source_url: intake.sourceUrl,
+        status: 'QUEUED',
+      });
+      if (jobError) throw jobError;
+      await supabase.from('mobile_bg_draft_action_log').insert({
+        draft_id: draft.id,
+        action: 'CATALOG_PUBLISH_REQUEST_QUEUED',
+        actor: 'Росен',
+        details: { catalog_permanent_id: seed.catalogPermanentId, source_type: intake.sourceType, source_listing_id: intake.sourceListingId },
+      });
+      setDraftToOpen(draft.id);
+      setSelectedVehicle(null);
+      setPage('imports');
+    } catch (error) {
+      window.alert(`Черновата не можа да бъде създадена: ${error instanceof Error ? error.message : 'неизвестна грешка'}`);
+    }
+  }
   function handleModeChange(nextMode: AppMode) { setMode(nextMode); setSelectedVehicle(null); setPage(nextMode === 'broker' ? 'broker' : 'dashboard'); }
 
   let content;
-  if (page === 'vehicles' && selectedVehicle !== null) content = <VehicleDetail vehicleId={selectedVehicle} onBack={() => setSelectedVehicle(null)} />;
-  else if (page === 'vehicles') content = <VehicleList onSelectVehicle={handleSelectVehicle} />;
+  if (page === 'vehicles' && selectedVehicle !== null) content = <VehicleDetail vehicleId={selectedVehicle} onBack={() => setSelectedVehicle(null)} onCreateDraft={handleCreateDraft} />;
+  else if (page === 'vehicles') content = <VehicleList onSelectVehicle={handleSelectVehicle} onCreateDraft={handleCreateDraft} />;
   else if (page === 'dashboard') content = <Dashboard />;
-  else if (page === 'imports') content = <Imports />;
+  else if (page === 'imports') content = <Imports openDraftId={draftToOpen} onDraftOpened={() => setDraftToOpen(null)} />;
   else if (page === 'jobs') content = <Jobs />;
   else if (page === 'conflicts') content = <Conflicts />;
   else if (page === 'broker') content = <BrokerSearch />;

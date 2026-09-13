@@ -4,10 +4,11 @@ import { supabase } from '@/lib/supabase';
 import { Badge } from '@/components/Badge';
 import { formatEUR, formatNumber, formatDate, formatDateTime, timeAgo, STATUS_COLORS, MARKETPLACE_LABELS, PRIORITY_LABELS, getStatusLabel, getBestPrice } from '@/lib/format';
 import type { Vehicle, VehicleMarketplace, PriceHistory, ImageRecord, ListingHistory, VehicleStatusLog, Sale } from '@/types';
+import { createDraftSeed, type DraftSeed } from '@/lib/draft_seed';
 
-interface VehicleDetailProps { vehicleId: number; onBack: () => void; }
+interface VehicleDetailProps { vehicleId: number; onBack: () => void; onCreateDraft: (seed: DraftSeed) => void; }
 
-export function VehicleDetail({ vehicleId, onBack }: VehicleDetailProps) {
+export function VehicleDetail({ vehicleId, onBack, onCreateDraft }: VehicleDetailProps) {
   const [vehicle, setVehicle] = useState<Vehicle | null>(null);
   const [marketplace, setMarketplace] = useState<VehicleMarketplace[]>([]);
   const [priceHistory, setPriceHistory] = useState<PriceHistory[]>([]);
@@ -123,6 +124,11 @@ export function VehicleDetail({ vehicleId, onBack }: VehicleDetailProps) {
                 <div className="mt-3 space-y-1.5">
                   <a href={m.listing_url || '#'} target="_blank" rel="noopener noreferrer" className={`flex h-9 items-center justify-center gap-2 rounded text-xs font-bold text-white ${marketMeta.button}`}>Отвори обявата в {marketMeta.source} <ExternalLink className="h-3.5 w-3.5" /></a>
                   <button className="h-8 w-full rounded bg-slate-100 text-xs font-semibold text-slate-600 hover:bg-slate-200">Копирай линк</button>
+                  {(m.marketplace === 'korea' || m.marketplace === 'canada') && m.listing_url && (
+                    <button onClick={() => onCreateDraft(createDraftSeed(vehicle, marketplace, m.marketplace === 'korea' ? 'korea' : 'canada'))} className="h-8 w-full rounded bg-blue-600 text-xs font-bold text-white hover:bg-blue-700">
+                      {m.marketplace === 'korea' ? 'Публикувай корейската' : 'Публикувай канадската'}
+                    </button>
+                  )}
                 </div>
                 </div>
               </div>;

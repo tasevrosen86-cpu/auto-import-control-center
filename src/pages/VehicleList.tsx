@@ -4,14 +4,15 @@ import { Badge } from '@/components/Badge';
 import { formatEUR, STATUS_COLORS, STATUS_LABELS_BG, getStatusLabel, getPriceColor, priceColorClass, calcDiff, diffColor } from '@/lib/format';
 import { catalogSorted, catalogStats, catalogFilterOptions, getCatalogModelsForMake, filterCatalog } from '@/lib/catalog';
 import type { VehicleWithMarketplace, VehicleMarketplace } from '@/types';
+import { createDraftSeed, type DraftSeed } from '@/lib/draft_seed';
 
-interface VehicleListProps { onSelectVehicle: (id: number) => void; }
+interface VehicleListProps { onSelectVehicle: (id: number) => void; onCreateDraft: (seed: DraftSeed) => void; }
 
 const PAGE_SIZE = 10;
 
 const FUEL_ORDER_LABEL = ['Бензин', 'Дизел', 'Хибрид', 'Електрически', 'Газ (LPG)'];
 
-export function VehicleList({ onSelectVehicle }: VehicleListProps) {
+export function VehicleList({ onSelectVehicle, onCreateDraft }: VehicleListProps) {
   const [makeFilter, setMakeFilter] = useState('ALL');
   const [modelFilter, setModelFilter] = useState('ALL');
   const [yearFrom, setYearFrom] = useState('ALL');
@@ -123,7 +124,7 @@ export function VehicleList({ onSelectVehicle }: VehicleListProps) {
             {pageVehicles.length === 0 ? (
               <tr><td colSpan={15} className="py-12 text-center text-slate-400">Няма намерени превозни средства</td></tr>
             ) : (
-              pageVehicles.map(v => <VehicleRow key={v.permanent_id} vehicle={v} onSelect={onSelectVehicle} />)
+              pageVehicles.map(v => <VehicleRow key={v.permanent_id} vehicle={v} onSelect={onSelectVehicle} onCreateDraft={onCreateDraft} />)
             )}
           </tbody>
         </table>
@@ -205,7 +206,7 @@ function Kpi({ icon, value, label, color }: { icon: string; value: number; label
   </div>;
 }
 
-function VehicleRow({ vehicle: v, onSelect }: { vehicle: VehicleWithMarketplace; onSelect: (id: number) => void }) {
+function VehicleRow({ vehicle: v, onSelect, onCreateDraft }: { vehicle: VehicleWithMarketplace; onSelect: (id: number) => void; onCreateDraft: (seed: DraftSeed) => void }) {
   const mps: VehicleMarketplace[] = v.vehicle_marketplace || [];
   const korea = mps.find(m => m.marketplace === 'korea');
   const canada = mps.find(m => m.marketplace === 'canada');
@@ -250,9 +251,13 @@ function VehicleRow({ vehicle: v, onSelect }: { vehicle: VehicleWithMarketplace;
         : <span className="text-slate-300">—</span>}
     </td>
     <td className="px-1 text-center">
-      <button onClick={e => { e.stopPropagation(); onSelect(v.permanent_id); }} className="rounded border border-blue-200 bg-blue-50 px-2 py-1 font-bold text-blue-600 hover:bg-blue-100">
-        <Eye className="inline h-3 w-3" /> Детайли
-      </button>
+      <div className="flex justify-center gap-1">
+        <button onClick={e => { e.stopPropagation(); onSelect(v.permanent_id); }} className="rounded border border-blue-200 bg-blue-50 px-2 py-1 font-bold text-blue-600 hover:bg-blue-100">
+          <Eye className="inline h-3 w-3" /> Детайли
+        </button>
+        {korea?.listing_url && <button onClick={e => { e.stopPropagation(); onCreateDraft(createDraftSeed(v, mps, 'korea')); }} className="rounded bg-rose-600 px-2 py-1 font-bold text-white hover:bg-rose-700">KR</button>}
+        {canada?.listing_url && <button onClick={e => { e.stopPropagation(); onCreateDraft(createDraftSeed(v, mps, 'canada')); }} className="rounded bg-blue-600 px-2 py-1 font-bold text-white hover:bg-blue-700">CA</button>}
+      </div>
     </td>
   </tr>;
 }

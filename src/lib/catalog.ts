@@ -1,6 +1,4 @@
-import part1 from '@/data/master_catalog_v40_part_01_of_03.json';
-import part2 from '@/data/master_catalog_v40_part_02_of_03.json';
-import part3 from '@/data/master_catalog_v40_part_03_of_03.json';
+import masterCatalog from '@/data/master_catalog_v40.json';
 import type { VehicleWithMarketplace, VehicleMarketplace, Marketplace } from '@/types';
 
 interface CatalogRecord {
@@ -161,9 +159,7 @@ function mapRecord(rec: CatalogRecord): VehicleWithMarketplace {
   };
 }
 
-const allParts = [part1, part2, part3] as unknown as { catalog: CatalogRecord[] }[];
-
-const rawRecords: CatalogRecord[] = allParts.flatMap((p) => p.catalog);
+const rawRecords: CatalogRecord[] = (masterCatalog as { catalog: CatalogRecord[] }).catalog;
 
 export const catalogRecords: VehicleWithMarketplace[] = rawRecords.map(mapRecord);
 

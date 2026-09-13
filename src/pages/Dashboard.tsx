@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Car, Flag, CheckCircle, AlertTriangle, TrendingDown, Globe, Clock, ShoppingCart, Search, ArrowRight, Activity } from 'lucide-react';
+import { Car, CheckCircle, AlertTriangle, TrendingDown, Globe, Clock, ShoppingCart, Search, Activity } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { StatCard } from '@/components/StatCard';
 import { Badge } from '@/components/Badge';

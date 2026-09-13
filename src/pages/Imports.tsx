@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import {
-  Download, CheckCircle, AlertTriangle, Plus, FileEdit, Image as ImageIcon,
-  Shield, ExternalLink, Save, Send, X, Search, ChevronDown, ChevronRight,
-  Lock, Unlock, Eye, Edit3, History, Copy, AlertOctagon, Filter,
+  Download, CheckCircle, AlertTriangle, Plus, Image as ImageIcon,
+  Shield, Save, Send, ChevronDown, ChevronRight,
+  Lock, Eye, Edit3, History, AlertOctagon,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { analyzeSourceUrl } from '@/lib/source_intake';
@@ -22,7 +22,12 @@ import type {
 
 type Tab = 'list' | 'new' | 'detail';
 
-export function Imports() {
+interface ImportsProps {
+  openDraftId?: string | null;
+  onDraftOpened?: () => void;
+}
+
+export function Imports({ openDraftId = null, onDraftOpened }: ImportsProps) {
   const [tab, setTab] = useState<Tab>('list');
   const [drafts, setDrafts] = useState<MobileBgDraft[]>([]);
   const [imports, setImports] = useState<ImportRecord[]>([]);
@@ -33,6 +38,12 @@ export function Imports() {
   const [sourceUrl, setSourceUrl] = useState('');
   const [intakeError, setIntakeError] = useState<string | null>(null);
   const [creatingFromUrl, setCreatingFromUrl] = useState(false);
+  useEffect(() => {
+    if (!openDraftId) return;
+    setSelectedDraftId(openDraftId);
+    setTab('detail');
+    onDraftOpened?.();
+  }, [openDraftId, onDraftOpened]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -321,7 +332,7 @@ interface DraftEditorProps {
 
 function DraftEditor({ sourceUrl, onBack, onSave }: DraftEditorProps) {
   const [fieldValues, setFieldValues] = useState<Record<string, string>>(() => {
-    if (!sourceUrl) return {};
+    if (!sourceUrl) return {} as Record<string, string>;
     const host = (() => {
       try { return new URL(sourceUrl).hostname.toLowerCase(); } catch { return ''; }
     })();
@@ -331,7 +342,7 @@ function DraftEditor({ sourceUrl, onBack, onSave }: DraftEditorProps) {
     return { source_url: sourceUrl, source_type: sourceType };
   });
   const [fieldSources, setFieldSources] = useState<Record<string, string>>(() => {
-    if (!sourceUrl) return {};
+    if (!sourceUrl) return {} as Record<string, string>;
     const host = (() => {
       try { return new URL(sourceUrl).hostname.toLowerCase(); } catch { return ''; }
     })();
@@ -608,17 +619,16 @@ function DraftEditor({ sourceUrl, onBack, onSave }: DraftEditorProps) {
         </div>
       </div>
 
-      {/* Agent info */}
+      {/* Script intake info */}
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3">
         <div className="flex items-start gap-2">
           <Lock className="h-4 w-4 text-blue-600 mt-0.5" />
           <div>
-            <p className="text-sm font-bold text-blue-800">10. Агент за публикуване</p>
+            <p className="text-sm font-bold text-blue-800">10. Скрипт за извличане</p>
             <p className="text-xs text-blue-700 mt-1">
-              Интерфейсът и базата са подготвени за бъдеща интеграция с Browser Use.
-              Агентът ще прави: <code className="rounded bg-blue-100 px-1">draft.mobile_bg_fields[поле] → реалното поле със същото име в Mobile.bg</code>.
-              За всяко поле се пази: стойност, източник, доказателство, статус на валидация, дата на попълване, дали е ръчно редактирано.
-              Публикуване не се разрешава при липсващи задължителни полета, снимки или неразрешен конфликт.
+              Външният скрипт извлича данните и изпраща JSON към защитения вход на системата.
+              Системата пази оригиналния JSON, попълва полетата, екстрите и снимките и показва какво още липсва за проверка.
+              Публикуването в Mobile.bg остава изключено, докато не се свърже отделно и не се тества с една обява.
             </p>
           </div>
         </div>

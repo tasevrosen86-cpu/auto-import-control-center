@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { Search, Car, ArrowRight, ExternalLink, TrendingDown, CheckCircle } from 'lucide-react';
+import { Search, Car, ExternalLink, TrendingDown, CheckCircle } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { Badge } from '@/components/Badge';
-import { formatEUR, formatNumber, STATUS_COLORS, MARKETPLACE_LABELS, getStatusLabel, getBestPrice } from '@/lib/format';
+import { formatEUR, getBestPrice } from '@/lib/format';
 import type { VehicleWithMarketplace } from '@/types';
 
 export function BrokerSearch() {
