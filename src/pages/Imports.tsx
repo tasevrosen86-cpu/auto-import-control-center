@@ -5,7 +5,7 @@ import {
   Lock, Eye, Edit3, History, AlertOctagon,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import { analyzeSourceUrl } from '@/lib/source_intake';
+import { createDraftFromSourceUrl } from '@/lib/draft_create';
 import { Badge } from '@/components/Badge';
 import { formatDateTime, timeAgo, STATUS_COLORS, getStatusLabel } from '@/lib/format';
 import {
@@ -14,10 +14,12 @@ import {
   DRAFT_STATUSES, DRAFT_STATUS_LABELS_BG, DRAFT_STATUS_COLORS,
   type FieldSection, type MobileBgFieldDef,
 } from '@/lib/mobile_bg_field_map';
+import { getPublishReadiness } from '@/lib/mobile_publisher';
 import type {
   ImportRecord, ImportConflict,
   MobileBgDraft, MobileBgDraftField, MobileBgDraftExtra,
   MobileBgDraftImage, MobileBgDraftActionLog, MobileBgDedupCheck,
+  MobileBgPublishJob,
 } from '@/types';
 
 type Tab = 'list' | 'new' | 'detail';
@@ -84,44 +86,9 @@ export function Imports({ openDraftId = null, onDraftOpened }: ImportsProps) {
       return;
     }
 
-    let intake;
-    try {
-      intake = analyzeSourceUrl(rawUrl);
-    } catch (error) {
-      setIntakeError(error instanceof Error ? error.message : 'Линкът не може да бъде разчетен.');
-      return;
-    }
-
     setCreatingFromUrl(true);
     try {
-      const title = `Изчаква извличане — ${intake.sourceLabel}${intake.sourceListingId ? ` #${intake.sourceListingId}` : ''}`;
-      const { data: draft, error: draftError } = await supabase.from('mobile_bg_drafts').insert({
-        title,
-        status: 'DRAFT',
-        source_type: intake.sourceType,
-        source_url: intake.sourceUrl,
-        source_listing_id: intake.sourceListingId,
-        intake_origin: 'DIRECT_LINK',
-        extraction_status: 'SOURCE_PENDING',
-        source_domain: intake.sourceDomain,
-        created_by: 'Росен',
-      }).select().single();
-      if (draftError) throw draftError;
-
-      const { error: jobError } = await supabase.from('source_listing_jobs').insert({
-        draft_id: draft.id,
-        source_type: intake.sourceType,
-        source_url: intake.sourceUrl,
-        status: 'QUEUED',
-      });
-      if (jobError) throw jobError;
-
-      await supabase.from('mobile_bg_draft_action_log').insert({
-        draft_id: draft.id,
-        action: 'SOURCE_INTAKE_QUEUED',
-        actor: 'Росен',
-        details: { intake_origin: 'DIRECT_LINK', source_type: intake.sourceType, source_listing_id: intake.sourceListingId },
-      });
+      const draft = await createDraftFromSourceUrl({ sourceUrl: rawUrl, origin: 'DIRECT_LINK' });
 
       setSourceUrl('');
       setSelectedDraftId(draft.id);
@@ -853,17 +820,20 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
   const [images, setImages] = useState<MobileBgDraftImage[]>([]);
   const [logs, setLogs] = useState<MobileBgDraftActionLog[]>([]);
   const [dedupChecks, setDedupChecks] = useState<MobileBgDedupCheck[]>([]);
+  const [publishJob, setPublishJob] = useState<MobileBgPublishJob | null>(null);
+  const [queuingPublish, setQueuingPublish] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function load() {
-      const [dRes, fRes, eRes, iRes, lRes, ddRes] = await Promise.all([
+      const [dRes, fRes, eRes, iRes, lRes, ddRes, pRes] = await Promise.all([
         supabase.from('mobile_bg_drafts').select('*').eq('id', draftId).maybeSingle(),
         supabase.from('mobile_bg_draft_fields').select('*').eq('draft_id', draftId).order('field_key'),
         supabase.from('mobile_bg_draft_extras').select('*').eq('draft_id', draftId).order('group_name'),
         supabase.from('mobile_bg_draft_images').select('*').eq('draft_id', draftId).order('display_order'),
         supabase.from('mobile_bg_draft_action_log').select('*').eq('draft_id', draftId).order('created_at', { ascending: false }),
         supabase.from('mobile_bg_dedup_checks').select('*').eq('draft_id', draftId).order('created_at', { ascending: false }),
+        supabase.from('mobile_bg_publish_jobs').select('*').eq('draft_id', draftId).maybeSingle(),
       ]);
       setDraft((dRes.data || null) as MobileBgDraft | null);
       setFields((fRes.data || []) as MobileBgDraftField[]);
@@ -871,10 +841,40 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
       setImages((iRes.data || []) as MobileBgDraftImage[]);
       setLogs((lRes.data || []) as MobileBgDraftActionLog[]);
       setDedupChecks((ddRes.data || []) as MobileBgDedupCheck[]);
+      setPublishJob((pRes.data || null) as MobileBgPublishJob | null);
       setLoading(false);
     }
     load();
   }, [draftId]);
+
+  async function queuePublish() {
+    const readiness = getPublishReadiness(fields);
+    if (!readiness.ready) {
+      window.alert(`Не могат да се изпратят данните без: ${readiness.missing.join(', ')}`);
+      return;
+    }
+    if (!window.confirm('Изпращам черновата към нашия Mobile.bg бот. Ботът ще отвори браузър само за тази заявка. Продължаваме?')) return;
+    setQueuingPublish(true);
+    try {
+      const now = new Date().toISOString();
+      const { data, error } = await supabase.from('mobile_bg_publish_jobs').upsert({
+        draft_id: draftId, status: 'QUEUED', transport: 'BROWSER_ON_DEMAND', mode: 'PREVIEW',
+        requested_by: 'Росен', requested_at: now, updated_at: now, last_error: null,
+      }, { onConflict: 'draft_id' }).select().single();
+      if (error) throw error;
+      await supabase.from('mobile_bg_drafts').update({ status: 'PUBLISH_QUEUED', publish_error: null, updated_at: now }).eq('id', draftId);
+      await supabase.from('mobile_bg_draft_action_log').insert({
+        draft_id: draftId, action: 'MOBILE_PUBLISH_QUEUED', actor: 'Росен',
+        details: { transport: 'BROWSER_ON_DEMAND', mode: 'PREVIEW' },
+      });
+      setPublishJob(data as MobileBgPublishJob);
+      setDraft(current => current ? { ...current, status: 'PUBLISH_QUEUED', publish_error: null } : current);
+    } catch (error) {
+      window.alert(`Заявката не можа да бъде изпратена: ${error instanceof Error ? error.message : 'неизвестна грешка'}`);
+    } finally {
+      setQueuingPublish(false);
+    }
+  }
 
   if (loading) return <div className="flex items-center justify-center h-96 text-slate-400">Зареждане...</div>;
   if (!draft) return <div className="text-center text-slate-400 py-12">Черновата не е намерена</div>;
@@ -897,7 +897,26 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
             </p>
           </div>
         </div>
-        <Badge color={DRAFT_STATUS_COLORS[draft.status] || 'slate'}>{DRAFT_STATUS_LABELS_BG[draft.status] || draft.status}</Badge>
+        <div className="flex items-center gap-2">
+          <Badge color={DRAFT_STATUS_COLORS[draft.status] || 'slate'}>{DRAFT_STATUS_LABELS_BG[draft.status] || draft.status}</Badge>
+          <button onClick={queuePublish} disabled={queuingPublish || publishJob?.status === 'RUNNING'} className="rounded-md bg-emerald-600 px-3 py-2 text-xs font-bold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">
+            {queuingPublish ? 'Изпращане…' : 'Публикувай'}
+          </button>
+        </div>
+      </div>
+
+      <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span><span className="font-bold">Източник:</span> {draft.source_type === 'encar' ? '🇰🇷 Encar Korea' : draft.source_type === 'autotrader_ca' ? '🇨🇦 AutoTrader Canada' : draft.source_type}</span>
+          <span><span className="font-bold">ID:</span> {draft.source_listing_id || 'няма'}</span>
+          <span><span className="font-bold">Статус:</span> {draft.extraction_status === 'SOURCE_PENDING' ? 'Изчаква извличане' : draft.extraction_status || '—'}</span>
+          {draft.source_url && <a href={draft.source_url} target="_blank" rel="noopener noreferrer" className="font-semibold text-blue-600 hover:underline">Отвори източника</a>}
+        </div>
+      </div>
+
+      <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+        JSON данните се изпращат директно към нашата система. За Mobile.bg е избран „браузър при заявка“: стартира се само след този бутон и се изключва след задачата.
+        {publishJob && <span className="ml-1 font-bold">Последна заявка: {publishJob.status}{publishJob.last_error ? ` — ${publishJob.last_error}` : ''}</span>}
       </div>
 
       {/* Fields by section */}

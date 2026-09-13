@@ -287,3 +287,20 @@ export interface MobileBgDedupCheck {
   resolved_reason: string | null;
   created_at: string;
 }
+
+export interface MobileBgPublishJob {
+  id: string;
+  draft_id: string;
+  status: string;
+  transport: 'BROWSER_ON_DEMAND' | 'OFFICIAL_API';
+  mode: 'PREVIEW' | 'LIVE';
+  requested_by: string;
+  claimed_by: string | null;
+  attempt_count: number;
+  last_error: string | null;
+  result: Record<string, unknown> | null;
+  requested_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  updated_at: string;
+}

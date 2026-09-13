@@ -13,8 +13,7 @@ import { Statistics } from '@/pages/Statistics';
 import { Sales } from '@/pages/Sales';
 import { supabase } from '@/lib/supabase';
 import type { DraftSeed } from '@/lib/draft_seed';
-import { analyzeSourceUrl } from '@/lib/source_intake';
-import { MOBILE_BG_FIELD_MAP } from '@/lib/mobile_bg_field_map';
+import { createDraftFromSourceUrl } from '@/lib/draft_create';
 
 function App() {
   const [page, setPage] = useState<Page>('vehicles');
@@ -39,54 +38,13 @@ function App() {
       return;
     }
     try {
-      const intake = analyzeSourceUrl(seed.sourceUrl);
-      const { data: draft, error: draftError } = await supabase.from('mobile_bg_drafts').insert({
-        catalog_permanent_id: seed.catalogPermanentId,
+      const draft = await createDraftFromSourceUrl({
+        sourceUrl: seed.sourceUrl,
+        origin: 'CATALOG',
         title: seed.title,
-        status: 'DRAFT',
-        source_type: intake.sourceType,
-        source_url: intake.sourceUrl,
-        source_listing_id: intake.sourceListingId,
-        intake_origin: 'CATALOG',
-        extraction_status: 'SOURCE_PENDING',
-        source_domain: intake.sourceDomain,
-        created_by: 'Росен',
-      }).select().single();
-      if (draftError) throw draftError;
-
-      const fieldRows = MOBILE_BG_FIELD_MAP
-        .filter(field => field.section !== 'extras')
-        .filter(field => seed.fields[field.key])
-        .map(field => ({
-          draft_id: draft.id,
-          field_key: field.key,
-          mobile_bg_label: field.mobile_bg_label,
-          our_db_key: field.our_db_key,
-          value: seed.fields[field.key],
-          field_type: field.field_type,
-          source: seed.fieldSources[field.key] || field.source,
-          proof: seed.sourceUrl,
-          validation_status: 'pending',
-          filled_at: new Date().toISOString(),
-          is_manual_edit: false,
-        }));
-      if (fieldRows.length) {
-        const { error } = await supabase.from('mobile_bg_draft_fields').insert(fieldRows);
-        if (error) throw error;
-      }
-
-      const { error: jobError } = await supabase.from('source_listing_jobs').insert({
-        draft_id: draft.id,
-        source_type: intake.sourceType,
-        source_url: intake.sourceUrl,
-        status: 'QUEUED',
-      });
-      if (jobError) throw jobError;
-      await supabase.from('mobile_bg_draft_action_log').insert({
-        draft_id: draft.id,
-        action: 'CATALOG_PUBLISH_REQUEST_QUEUED',
-        actor: 'Росен',
-        details: { catalog_permanent_id: seed.catalogPermanentId, source_type: intake.sourceType, source_listing_id: intake.sourceListingId },
+        catalogPermanentId: seed.catalogPermanentId,
+        fields: seed.fields,
+        fieldSources: seed.fieldSources,
       });
       setDraftToOpen(draft.id);
       setSelectedVehicle(null);
