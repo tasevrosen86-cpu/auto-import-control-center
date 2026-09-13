@@ -1,0 +1,28 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: 'Inter', system-ui, sans-serif;
+  color: #16213b;
+  background: #f5f7fb;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; background: #f5f7fb; }
+button, input, select { font: inherit; }
+
+@layer components {
+  .app-card { @apply rounded-md border border-slate-200 bg-white shadow-sm; }
+  .field-label { @apply mb-1 block text-[11px] font-medium text-slate-500; }
+  .compact-select { @apply h-9 w-full rounded border border-slate-200 bg-white px-2.5 text-xs text-slate-700 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100; }
+}
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #eef2f7; }
+::-webkit-scrollbar-thumb { background: #c4cedb; border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: #9aa9bc; }
