@@ -5,6 +5,7 @@ import {
   Lock, Unlock, Eye, Edit3, History, Copy, AlertOctagon, Filter,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import { analyzeSourceUrl } from '@/lib/source_intake';
 import { Badge } from '@/components/Badge';
 import { formatDateTime, timeAgo, STATUS_COLORS, getStatusLabel } from '@/lib/format';
 import {
@@ -30,6 +31,8 @@ export function Imports() {
   const [selectedDraftId, setSelectedDraftId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [sourceUrl, setSourceUrl] = useState('');
+  const [intakeError, setIntakeError] = useState<string | null>(null);
+  const [creatingFromUrl, setCreatingFromUrl] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -60,7 +63,64 @@ export function Imports() {
     error: drafts.filter(d => d.status === 'ERROR').length,
   }), [drafts]);
 
-  function handleNewDraft() { setTab('new'); setSelectedDraftId(null); }
+  async function handleNewDraft() {
+    const rawUrl = sourceUrl.trim();
+    setIntakeError(null);
+
+    if (!rawUrl) {
+      setTab('new');
+      setSelectedDraftId(null);
+      return;
+    }
+
+    let intake;
+    try {
+      intake = analyzeSourceUrl(rawUrl);
+    } catch (error) {
+      setIntakeError(error instanceof Error ? error.message : 'Линкът не може да бъде разчетен.');
+      return;
+    }
+
+    setCreatingFromUrl(true);
+    try {
+      const title = `Изчаква извличане — ${intake.sourceLabel}${intake.sourceListingId ? ` #${intake.sourceListingId}` : ''}`;
+      const { data: draft, error: draftError } = await supabase.from('mobile_bg_drafts').insert({
+        title,
+        status: 'DRAFT',
+        source_type: intake.sourceType,
+        source_url: intake.sourceUrl,
+        source_listing_id: intake.sourceListingId,
+        intake_origin: 'DIRECT_LINK',
+        extraction_status: 'SOURCE_PENDING',
+        source_domain: intake.sourceDomain,
+        created_by: 'Росен',
+      }).select().single();
+      if (draftError) throw draftError;
+
+      const { error: jobError } = await supabase.from('source_listing_jobs').insert({
+        draft_id: draft.id,
+        source_type: intake.sourceType,
+        source_url: intake.sourceUrl,
+        status: 'QUEUED',
+      });
+      if (jobError) throw jobError;
+
+      await supabase.from('mobile_bg_draft_action_log').insert({
+        draft_id: draft.id,
+        action: 'SOURCE_INTAKE_QUEUED',
+        actor: 'Росен',
+        details: { intake_origin: 'DIRECT_LINK', source_type: intake.sourceType, source_listing_id: intake.sourceListingId },
+      });
+
+      setSourceUrl('');
+      setSelectedDraftId(draft.id);
+      setTab('detail');
+    } catch (error) {
+      setIntakeError(error instanceof Error ? error.message : 'Черновата не можа да бъде създадена.');
+    } finally {
+      setCreatingFromUrl(false);
+    }
+  }
   function handleSelectDraft(id: string) { setSelectedDraftId(id); setTab('detail'); }
 
   if (loading) {
@@ -100,10 +160,11 @@ export function Imports() {
             className="h-9 w-64 rounded-md border border-slate-200 bg-white px-3 text-xs text-slate-700 outline-none placeholder:text-slate-400 focus:border-blue-400 lg:w-80"
           />
           <button onClick={handleNewDraft} className="flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-2 text-xs font-bold text-white shadow-sm hover:bg-blue-700">
-            <Plus className="h-3.5 w-3.5" /> Нова обява
+            <Plus className="h-3.5 w-3.5" /> {creatingFromUrl ? 'Създаване…' : 'Нова обява'}
           </button>
         </div>
       </div>
+      {intakeError && <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">{intakeError}</div>}
 
       {/* KPI cards */}
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
@@ -144,7 +205,7 @@ export function Imports() {
                   <td className="px-2 py-2">
                     <p className="font-bold text-slate-800 truncate">{d.title || `Чернова ${d.id.slice(0, 8)}`}</p>
                     <p className="text-slate-500 truncate">
-                      {d.source_type === 'encar' ? '🇰🇷' : d.source_type === 'autotrader' ? '🇨🇦' : '📋'} {d.source_type}
+                      {d.source_type === 'encar' ? '🇰🇷' : (d.source_type === 'autotrader' || d.source_type === 'autotrader_ca') ? '🇨🇦' : '📋'} {d.source_type}
                       {d.source_listing_id ? ` · ${d.source_listing_id}` : ''}
                       {d.catalog_permanent_id ? ` · PID ${d.catalog_permanent_id}` : ''}
                     </p>
