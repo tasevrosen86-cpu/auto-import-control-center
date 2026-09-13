@@ -213,6 +213,10 @@ export interface MobileBgDraft {
   published_at: string | null;
   last_checked_at: string | null;
   publish_error: string | null;
+  intake_origin?: string;
+  extraction_status?: string;
+  source_domain?: string | null;
+  extraction_error?: string | null;
 }
 
 export interface MobileBgDraftField {
