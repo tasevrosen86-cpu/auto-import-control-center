@@ -1,21 +1,9 @@
 import { MOBILE_BG_FIELD_MAP } from '@/lib/mobile_bg_field_map';
+import type { DraftSeed } from '@/lib/draft_seed';
 import { analyzeSourceUrl, type IntakeSourceType } from '@/lib/source_intake';
 import { supabase } from '@/lib/supabase';
 
-export type IntakeOrigin = 'LINK_FIELD' | 'ADMIN_CATALOG' | 'BROKER_LINK';
-
-export type SourceIntakeContext = {
-  origin: IntakeOrigin;
-  catalogPermanentId?: number;
-  title?: string;
-  fields?: Record<string, string>;
-  fieldSources?: Record<string, string>;
-};
-
-export type CreateDraftFromSourceInput = {
-  sourceUrl: string;
-  context: SourceIntakeContext;
-};
+export type IntakeOrigin = 'LINK_FIELD' | 'BROKER_LINK';
 
 export type CreatedSourceDraft = {
   id: string;
@@ -25,17 +13,79 @@ export type CreatedSourceDraft = {
   wasCreated: boolean;
 };
 
-// Every source enters here: a pasted broker link or a catalog link prefilled
-// for an administrator. The database owns deduplication and job creation.
-export async function createDraftFromSourceUrl(input: CreateDraftFromSourceInput): Promise<CreatedSourceDraft> {
-  const intake = analyzeSourceUrl(input.sourceUrl);
-  const { data, error: queueError } = await supabase.functions.invoke('queue-source-intake', {
-    body: {
-      source_url: intake.sourceUrl,
-      intake_origin: input.context.origin,
-      catalog_permanent_id: input.context.catalogPermanentId ?? null,
-      title: input.context.title ?? null,
+function fieldRows(draftId: string, fields: Record<string, string>, fieldSources: Record<string, string>, proof: string) {
+  return MOBILE_BG_FIELD_MAP
+    .filter(field => field.section !== 'extras')
+    .filter(field => Boolean(fields[field.key]))
+    .map(field => ({
+      draft_id: draftId,
+      field_key: field.key,
+      mobile_bg_label: field.mobile_bg_label,
+      our_db_key: field.our_db_key,
+      value: fields[field.key],
+      field_type: field.field_type,
+      source: fieldSources[field.key] || 'catalog',
+      proof,
+      validation_status: 'pending',
+      filled_at: new Date().toISOString(),
+      is_manual_edit: false,
+    }));
+}
+
+/**
+ * Catalog path: the already stored catalog JSON is parsed by createDraftSeed
+ * before this call. No URL extraction job is created and the link field is not
+ * involved.
+ */
+export async function createDraftFromCatalog(seed: DraftSeed): Promise<string> {
+  const intake = seed.sourceUrl ? analyzeSourceUrl(seed.sourceUrl) : null;
+  const { data: draft, error: draftError } = await supabase
+    .from('mobile_bg_drafts')
+    .insert({
+      catalog_permanent_id: seed.catalogPermanentId,
+      title: seed.title,
+      status: 'DRAFT',
+      source_type: intake?.sourceType || 'catalog',
+      source_url: seed.sourceUrl,
+      source_listing_id: intake?.sourceListingId || null,
+      intake_origin: 'ADMIN_CATALOG',
+      extraction_status: 'CATALOG_JSON_READY',
+      source_domain: intake?.sourceDomain || 'catalog',
+      created_by: 'Catalog JSON',
+    })
+    .select('id')
+    .single();
+
+  if (draftError || !draft) throw new Error(draftError?.message || 'Черновата от Каталога не беше създадена.');
+
+  const rows = fieldRows(draft.id, seed.fields, seed.fieldSources, seed.sourceUrl || `catalog:${seed.catalogPermanentId}`);
+  if (rows.length) {
+    const { error } = await supabase.from('mobile_bg_draft_fields').upsert(rows, { onConflict: 'draft_id,field_key' });
+    if (error) throw new Error(error.message);
+  }
+
+  const { error: logError } = await supabase.from('mobile_bg_draft_action_log').insert({
+    draft_id: draft.id,
+    action: 'CATALOG_JSON_DRAFT_CREATED',
+    actor: 'Catalog',
+    details: {
+      catalog_permanent_id: seed.catalogPermanentId,
+      field_count: rows.length,
+      source_url: seed.sourceUrl,
     },
+  });
+  if (logError) throw new Error(logError.message);
+  return draft.id;
+}
+
+/**
+ * Manual path shared by Обяви and Broker Access. It only queues a source URL;
+ * the source-intake worker fetches the listing and sends its JSON to ingestion.
+ */
+export async function createDraftFromSourceUrl(sourceUrl: string, origin: IntakeOrigin): Promise<CreatedSourceDraft> {
+  const intake = analyzeSourceUrl(sourceUrl);
+  const { data, error: queueError } = await supabase.functions.invoke('queue-source-intake', {
+    body: { source_url: intake.sourceUrl, intake_origin: origin },
   });
   if (queueError) throw queueError;
 
@@ -44,27 +94,11 @@ export async function createDraftFromSourceUrl(input: CreateDraftFromSourceInput
   const wasCreated = Boolean(queued?.was_created);
   if (!draftId) throw new Error('Заявката за извличане не върна чернова.');
 
-  const sourceFields = input.context.fields || {};
-  const fieldRows = MOBILE_BG_FIELD_MAP
-    .filter(field => field.section !== 'extras')
-    .filter(field => Boolean(sourceFields[field.key]))
-    .map(field => ({
-      draft_id: draftId,
-      field_key: field.key,
-      mobile_bg_label: field.mobile_bg_label,
-      our_db_key: field.our_db_key,
-      value: sourceFields[field.key],
-      field_type: field.field_type,
-      source: input.context.fieldSources?.[field.key] || field.source,
-      proof: intake.sourceUrl,
-      validation_status: 'pending',
-      filled_at: new Date().toISOString(),
-      is_manual_edit: false,
-    }));
-  if (wasCreated && fieldRows.length) {
-    const { error } = await supabase.from('mobile_bg_draft_fields').upsert(fieldRows, { onConflict: 'draft_id,field_key' });
-    if (error) throw error;
-  }
-
-  return { id: draftId, sourceType: intake.sourceType, sourceUrl: intake.sourceUrl, sourceListingId: intake.sourceListingId, wasCreated };
+  return {
+    id: draftId,
+    sourceType: intake.sourceType,
+    sourceUrl: intake.sourceUrl,
+    sourceListingId: intake.sourceListingId,
+    wasCreated,
+  };
 }
