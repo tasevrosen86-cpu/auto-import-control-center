@@ -22,7 +22,7 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Build
+      - name: Build website
         run: |
           npm ci
           npm run build
@@ -37,15 +37,23 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Inspect publisher prerequisites
+      - name: Prepare publisher environment
         env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_PORT: ${{ secrets.VPS_PORT || 22 }}
+          MOBILE_BG_USERNAME: ${{ secrets.MOBILE_BG_USERNAME }}
+          MOBILE_BG_PASSWORD: ${{ secrets.MOBILE_BG_PASSWORD }}
         run: |
-          ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" 'set +e; echo "NODE=$(node --version 2>/dev/null || echo missing)"; echo "NPM=$(npm --version 2>/dev/null || echo missing)"; for file in /etc/aicc-mobile-publisher.env /etc/auto-import-control-center/mobile-publisher.env /home/ubuntu/auto-import-control-center/services/mobile-publisher/package.json /home/ubuntu/.local/share/aicc-mobile-bg; do if [ -e "$file" ]; then echo "FOUND:$file"; else echo "MISSING:$file"; fi; done; for unit in aicc-mobile-publisher.service aicc-mobile-publisher.timer mobile-publisher.service mobile-publisher.timer; do printf "%s=" "$unit"; systemctl is-active "$unit" 2>/dev/null || true; done'
+          umask 077
+          {
+            printf 'SUPABASE_URL=%s\n' 'https://cgftjqwebvddtsbcbeml.supabase.co'
+            printf 'SUPABASE_ANON_KEY=%s\n' 'sb_publishable_3szh1-AiAAUYDeVBwO7bJQ_gXhkBU0A'
+            printf 'MOBILE_BG_USERNAME=%s\n' "$MOBILE_BG_USERNAME"
+            printf 'MOBILE_BG_PASSWORD=%s\n' "$MOBILE_BG_PASSWORD"
+            printf 'MOBILE_BG_USER_DATA_DIR=%s\n' '/home/ubuntu/.local/share/aicc-mobile-bg'
+            printf 'MOBILE_BG_HEADLESS=true\n'
+            printf 'WORKER_NAME=%s\n' 'aicc-mobile-publisher'
+          } > mobile-publisher.env
 
-      - name: Upload and activate build
+      - name: Upload and activate website, workers and publisher
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
@@ -53,5 +61,64 @@ jobs:
         run: |
           tar -C dist -czf dist.tar.gz .
           tar -C services/source-intake-worker -czf worker.tar.gz src package.json
-          scp -P "$VPS_PORT" dist.tar.gz worker.tar.gz "$VPS_USER@$VPS_HOST:/tmp/"
-          ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" "rm -rf /tmp/auto-import-control-center-dist && mkdir -p /tmp/auto-import-control-center-dist && tar -xzf /tmp/dist.tar.gz -C /tmp/auto-import-control-center-dist && sudo cp -a /tmp/auto-import-control-center-dist/. /var/www/html/ && tar -xzf /tmp/worker.tar.gz -C /home/ubuntu/auto-import-control-center/services/source-intake-worker && sudo systemctl reload nginx"
+          tar -C services/mobile-publisher -czf mobile-publisher.tar.gz src package.json package-lock.json
+          scp -P "$VPS_PORT" dist.tar.gz worker.tar.gz mobile-publisher.tar.gz mobile-publisher.env "$VPS_USER@$VPS_HOST:/tmp/"
+
+          ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" 'bash -s' <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          APP_DIR="/home/ubuntu/auto-import-control-center"
+          PUBLISHER_DIR="$APP_DIR/services/mobile-publisher"
+
+          mkdir -p /tmp/auto-import-control-center-dist
+          tar -xzf /tmp/dist.tar.gz -C /tmp/auto-import-control-center-dist
+          sudo cp -a /tmp/auto-import-control-center-dist/. /var/www/html/
+
+          mkdir -p "$APP_DIR/services/source-intake-worker"
+          tar -xzf /tmp/worker.tar.gz -C "$APP_DIR/services/source-intake-worker"
+
+          mkdir -p "$PUBLISHER_DIR"
+          tar -xzf /tmp/mobile-publisher.tar.gz -C "$PUBLISHER_DIR"
+          cd "$PUBLISHER_DIR"
+          npm ci
+          npx playwright install chromium
+
+          mkdir -p /home/ubuntu/.local/share/aicc-mobile-bg
+          sudo install -m 600 /tmp/mobile-publisher.env /etc/aicc-mobile-publisher.env
+          rm -f /tmp/dist.tar.gz /tmp/worker.tar.gz /tmp/mobile-publisher.tar.gz /tmp/mobile-publisher.env
+
+          NPM_BIN="$(command -v npm)"
+          sudo tee /etc/systemd/system/aicc-mobile-publisher.service >/dev/null <<UNIT
+          [Unit]
+          Description=Auto Import Control Center Mobile.bg preview publisher
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=oneshot
+          User=ubuntu
+          WorkingDirectory=$PUBLISHER_DIR
+          EnvironmentFile=/etc/aicc-mobile-publisher.env
+          ExecStart=$NPM_BIN run run-once
+          UNIT
+
+          sudo tee /etc/systemd/system/aicc-mobile-publisher.timer >/dev/null <<UNIT
+          [Unit]
+          Description=Run Mobile.bg preview publisher for queued jobs
+
+          [Timer]
+          OnBootSec=30s
+          OnUnitActiveSec=60s
+          Persistent=true
+          Unit=aicc-mobile-publisher.service
+
+          [Install]
+          WantedBy=timers.target
+          UNIT
+
+          sudo systemctl daemon-reload
+          sudo systemctl enable --now aicc-mobile-publisher.timer
+          sudo systemctl start aicc-mobile-publisher.service || true
+          sudo systemctl reload nginx
+          REMOTE_SCRIPT
+
+          rm -f mobile-publisher.env dist.tar.gz worker.tar.gz mobile-publisher.tar.gz
