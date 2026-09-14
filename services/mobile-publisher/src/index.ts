@@ -1,9 +1,13 @@
 import { createClient } from '@supabase/supabase-js';
 import { chromium, type Page } from 'playwright';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 type PublishJob = { id: string; draft_id: string; mode: 'PREVIEW' | 'LIVE' };
 type DraftField = { field_key: string; value: string | null };
 type DraftExtra = { mobile_bg_label: string; selected: boolean };
+type DraftImage = { source_url: string | null; local_path: string | null; is_selected: boolean; is_main: boolean; display_order: number; };
 
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
 for (const [name, value] of [
@@ -105,6 +109,39 @@ async function submitLiveListing(page: Page) {
   }
   return { submitted: await clickVisibleButton(page, finalSelectors), advanced };
 }
+async function uploadSelectedImages(page: Page, images: DraftImage[]) {
+  const selected = images.filter(image => image.is_selected).sort((a, b) => a.display_order - b.display_order);
+  if (selected.length === 0) return { uploaded: 0, skipped: ['Няма избрани снимки.'] };
+  const workDir = join(tmpdir(), 'aicc-mobile-bg-images');
+  await mkdir(workDir, { recursive: true });
+  const files: string[] = [];
+  const skipped: string[] = [];
+  try {
+    for (let index = 0; index < selected.length; index += 1) {
+      const image = selected[index];
+      const filePath = image.local_path && image.local_path.startsWith('/') ? image.local_path : join(workDir, `image-${index + 1}.jpg`);
+      if (!(image.local_path && image.local_path.startsWith('/'))) {
+        if (!image.source_url) { skipped.push(`Снимка #${index + 1}: липсва URL.`); continue; }
+        const response = await fetch(image.source_url);
+        if (!response.ok) { skipped.push(`Снимка #${index + 1}: HTTP ${response.status}.`); continue; }
+        await writeFile(filePath, Buffer.from(await response.arrayBuffer()));
+      }
+      files.push(filePath);
+    }
+    const inputs = page.locator('input[type="file"]');
+    const count = await inputs.count();
+    if (count === 0) return { uploaded: 0, skipped: [...skipped, 'Mobile.bg не показа поле за снимки.'] };
+    await inputs.first().setInputFiles(files);
+    await page.waitForTimeout(1000);
+    return { uploaded: files.length, skipped };
+  } finally {
+    for (const file of files) {
+      if (file.startsWith(workDir)) await rm(file, { force: true }).catch(() => undefined);
+    }
+    await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
 async function selectText(page: Page, selector: string, wanted: string) {
   const select = page.locator(selector).first();
   const normalized = wanted.trim().toLocaleLowerCase('bg');
@@ -184,12 +221,14 @@ async function run() {
   if (claimError) throw claimError;
   const job = (claimed || null) as PublishJob | null;
   if (!job) return console.log('Заявката вече се обработва от друг worker.');
-  const [fieldResult, extraResult] = await Promise.all([
+  const [fieldResult, extraResult, imageResult] = await Promise.all([
     db.from('mobile_bg_draft_fields').select('field_key,value').eq('draft_id', job.draft_id),
     db.from('mobile_bg_draft_extras').select('mobile_bg_label,selected').eq('draft_id', job.draft_id).eq('selected', true),
+    db.from('mobile_bg_draft_images').select('source_url,local_path,is_selected,is_main,display_order').eq('draft_id', job.draft_id).eq('is_selected', true).order('display_order', { ascending: true }),
   ]);
   if (fieldResult.error) throw fieldResult.error;
   if (extraResult.error) throw extraResult.error;
+  if (imageResult.error) throw imageResult.error;
   const context = await chromium.launchPersistentContext(profileDir, { headless: process.env.MOBILE_BG_HEADLESS === 'true' });
   try {
     const page = context.pages()[0] || await context.newPage();
@@ -198,15 +237,17 @@ async function run() {
     if (loginState === 'credentials_missing') return await finish(job, 'NEEDS_LOGIN', { url: page.url() }, 'Нужен е еднократен защитен вход в Mobile.bg на сървъра.');
     if (loginState === 'form_not_recognized' || loginState === 'login_failed') return await finish(job, 'NEEDS_LOGIN', { url: page.url(), reason: loginState }, 'Mobile.bg не прие автоматичния вход.');
     const result = await populateStepOne(page, fieldResult.data || [], extraResult.data || []);
+    const imageUpload = await uploadSelectedImages(page, (imageResult.data || []) as DraftImage[]);
+    if (imageUpload.uploaded === 0) return await finish(job, 'NEEDS_CONFIGURATION', { ...result, image_upload: imageUpload, url: page.url(), login_state: loginState }, 'Няма качени избрани снимки. Избери поне една снимка за обявата.');
     const screenshotPath = `/tmp/mobile-bg-${job.id}.png`;
     await page.screenshot({ path: screenshotPath, fullPage: true });
     if (job.mode === 'LIVE') {
       const submission = await submitLiveListing(page);
       await page.screenshot({ path: screenshotPath, fullPage: true });
       if (!submission.submitted) {
-        return await finish(job, 'NEEDS_CONFIGURATION', { ...result, ...submission, url: page.url(), login_state: loginState, screenshot_path: screenshotPath }, 'Mobile.bg не показа финален бутон за публикуване или изисква допълнителни полета/снимки.');
+        return await finish(job, 'NEEDS_CONFIGURATION', { ...result, ...submission, image_upload: imageUpload, url: page.url(), login_state: loginState, screenshot_path: screenshotPath }, 'Mobile.bg не показа финален бутон за публикуване или изисква допълнителни полета/снимки.');
       }
-      return await finish(job, 'COMPLETED', { ...result, ...submission, url: page.url(), login_state: loginState, screenshot_path: screenshotPath, message: 'Тестовата обява е изпратена към Mobile.bg.' });
+      return await finish(job, 'COMPLETED', { ...result, ...submission, image_upload: imageUpload, url: page.url(), login_state: loginState, screenshot_path: screenshotPath, message: 'Тестовата обява е изпратена към Mobile.bg.' });
     }
     await finish(job, 'PREVIEW_READY', { ...result, url: page.url(), login_state: loginState, screenshot_path: screenshotPath, message: 'Стъпка 1 е попълнена без изпращане към Mobile.bg.' });
   } catch (cause) {
