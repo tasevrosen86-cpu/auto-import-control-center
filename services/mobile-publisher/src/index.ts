@@ -5,10 +5,15 @@ type PublishJob = { id: string; draft_id: string; mode: 'PREVIEW' | 'LIVE' };
 type DraftField = { field_key: string; value: string | null };
 type DraftExtra = { mobile_bg_label: string; selected: boolean };
 
-for (const name of ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'MOBILE_BG_USER_DATA_DIR']) {
-  if (!process.env[name]) throw new Error(`Липсва ${name}.`);
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+for (const [name, value] of [
+  ['SUPABASE_URL', process.env.SUPABASE_URL],
+  ['SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY', supabaseKey],
+  ['MOBILE_BG_USER_DATA_DIR', process.env.MOBILE_BG_USER_DATA_DIR],
+] as const) {
+  if (!value) throw new Error(`Липсва ${name}.`);
 }
-const db = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false } });
+const db = createClient(process.env.SUPABASE_URL!, supabaseKey!, { auth: { persistSession: false } });
 const workerName = process.env.WORKER_NAME || `mobile-publisher-${process.pid}`;
 const profileDir = process.env.MOBILE_BG_USER_DATA_DIR!;
 const newListingUrl = process.env.MOBILE_BG_NEW_LISTING_URL || 'https://www.mobile.bg/pcgi/mobile.cgi?pubtype=1&act=6&subact=4&actions=1';
