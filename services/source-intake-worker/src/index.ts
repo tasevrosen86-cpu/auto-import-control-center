@@ -11,6 +11,28 @@ for (const name of ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY']) {
 const db = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false } });
 const ingestUrl = process.env.SOURCE_INGEST_URL || `${process.env.SUPABASE_URL}/functions/v1/ingest-source-listing`;
 const workerName = process.env.WORKER_NAME || `source-intake-${process.pid}`;
+const companyDescription = `RoyalCarsBG професионален внос на проверени автомобили от САЩ и Канада
+
+Специализираме в директния внос на автомобили от САЩ, Канада и Южна Корея, като залагаме на качество, прозрачност и сигурност при всяка сделка. Работим само с внимателно подбрани автомобили и надеждни партньори, за да гарантираме реалното състояние и произход на всяка кола.
+
+Към всеки автомобил предоставяме:
+- Пълна сервизна история чрез Carfax / AutoCheck
+- Допълнителни снимки и видео на автомобила
+- Подробна проверка за удари и техническо състояние
+
+Какво получавате с RoyalCarsBG:
+- Финансиране възможно и без първоначална вноска
+- Сигурен и прозрачен авто внос без скрити такси
+- Автомобили от официални представителства и доверени дилъри
+- Личен консултант от избора на автомобила до регистрацията
+- Пълно съдействие с транспорт, мита, документи, технотест, миграция на мигачи и регистрация
+- Съдействие при издаване на ГО и Каско
+- Срок за доставка: от 2 до 3 месеца
+- Ясни условия и коректно отношение
+
+При нас няма скрити комисионни или неясни условия. Всички разходи се уточняват предварително, за да знаете точно какво получавате и на каква цена.
+
+Свържете се с нас на 0887353653 за повече информация или конкретно запитване за автомобила.`;
 
 function asRecord(value: unknown): JsonRecord {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
@@ -165,7 +187,15 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string)
   push('vin', firstValue(vehicle, ['vehicleIdentificationNumber', 'vin']));
   push('condition', normalizeCondition(firstValue(vehicle, ['itemCondition', 'condition'])));
   push('drivetrain', firstValue(vehicle, ['driveWheelConfiguration', 'drivetrain', 'driveType']));
-  push('description_auto', description);
+  const finalDescription = [description, companyDescription].filter(Boolean).join('\\n\\n');
+  push('description', finalDescription);
+  push('auto_description', description);
+  push('final_description', finalDescription);
+  push('seller_name', 'RoyalCarsBG');
+  push('phone', '0887353653');
+  push('ad_type', 'Стандартна');
+  push('company_template', 'Стандартен');
+  push('description_language', 'Български');
   push('source_type', source === 'encar' ? 'Encar' : 'AutoTrader Canada');
   push('source_url', job.source_url);
   push('source_listing_id', firstValue(vehicle, ['sku', 'listingId', 'id']) || job.source_url.match(/[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}/i)?.[0] || null);
