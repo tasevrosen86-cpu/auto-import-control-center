@@ -131,6 +131,17 @@ function normalizeCondition(value: string | null): string | null {
   if (!value) return 'Използван';
   return value.toLowerCase().includes('new') ? 'Нов' : 'Използван';
 }
+function normalizeColor(value: string | null): string | null {
+  if (!value) return null;
+  const source = value.toLowerCase();
+  if (source.includes('grey') || source.includes('gray')) return 'Сив';
+  if (source.includes('black')) return 'Черен';
+  if (source.includes('white')) return 'Бял';
+  if (source.includes('red')) return 'Червен';
+  if (source.includes('blue')) return 'Син';
+  if (source.includes('silver')) return 'Сребърен';
+  return value;
+}
 function imagesFrom(root: unknown): JsonRecord[] {
   const urls = new Set<string>();
   const imageKeys = new Set(['image', 'images', 'photo', 'photos', 'imageurl', 'imageurls', 'photourl', 'photourls', 'contenturl', 'largeimage', 'originalimage']);
@@ -196,6 +207,9 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string)
   const displacement = numberText(nested(vehicle, 'vehicleEngine', ['engineDisplacement', 'displacement']) || firstValue(vehicle, ['engineDisplacement', 'displacement']));
   const price = nested(vehicle, 'offers', ['price']) || firstValue(vehicle, ['price', 'salePrice']);
   const currency = nested(vehicle, 'offers', ['priceCurrency']) || firstValue(vehicle, ['priceCurrency', 'currency']);
+  const modification = firstValue(vehicle, ['trim', 'variant', 'package', 'modification']) ||
+    (source === 'autotrader_ca' && /technik/i.test(pageTitle) ? 'Technik' : null);
+  const color = normalizeColor(firstValue(vehicle, ['color', 'vehicleColor']));
   const description = companyDescription;
   const fields: Array<{ key: string; value: string; source: string; proof: string }> = [];
   const push = (key: string, value: string | null) => { if (value) fields.push({ key, value, source, proof: job.source_url }); };
@@ -203,14 +217,15 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string)
   push('category', 'Автомобили и джипове');
   push('make', brand);
   push('model', model);
+  push('modification', modification);
   push('year', year);
-  if (source === 'autotrader_ca' && year) push('month', 'Декември');
+  if (source === 'autotrader_ca') push('month', 'Декември');
   push('mileage', mileage);
   push('fuel', fuel);
   push('gearbox', gearbox);
   push('power', power);
   push('displacement', displacement);
-  push('color', firstValue(vehicle, ['color', 'vehicleColor']));
+  push('color', color);
   push('doors', firstValue(vehicle, ['numberOfDoors', 'doors']));
   push('seats', firstValue(vehicle, ['seatingCapacity', 'seats']));
   push('vin', firstValue(vehicle, ['vehicleIdentificationNumber', 'vin']));
