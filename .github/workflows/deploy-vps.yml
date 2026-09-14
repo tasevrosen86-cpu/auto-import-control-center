@@ -141,6 +141,34 @@ jobs:
             exit 1
           fi
           sudo systemctl --no-pager --full status aicc-mobile-publisher.service || true
+          set -a
+          . /etc/aicc-mobile-publisher.env
+          set +a
+          cd "$PUBLISHER_DIR"
+          node --input-type=module <<'NODE'
+          import { createClient } from '@supabase/supabase-js';
+          const db = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY);
+          const { data, error } = await db
+            .from('mobile_bg_publish_jobs')
+            .select('id,draft_id,status,mode,last_error,requested_at,finished_at,result')
+            .order('requested_at', { ascending: false })
+            .limit(5);
+          if (error) {
+            console.error(error.message);
+            process.exit(1);
+          }
+          console.log(JSON.stringify((data || []).map(row => ({
+            id: row.id,
+            draft_id: row.draft_id,
+            status: row.status,
+            mode: row.mode,
+            last_error: row.last_error,
+            requested_at: row.requested_at,
+            finished_at: row.finished_at,
+            result_message: row.result?.message || null,
+            result_reason: row.result?.reason || null
+          }))));
+          NODE
           sudo systemctl reload nginx
           REMOTE_SCRIPT
 
