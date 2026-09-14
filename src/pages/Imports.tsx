@@ -5,7 +5,7 @@ import {
   Lock, Eye, Edit3, History, AlertOctagon,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import { createDraftFromSourceUrl, type SourceIntakeContext } from '@/lib/draft_create';
+import { createDraftFromSourceUrl } from '@/lib/draft_create';
 import { Badge } from '@/components/Badge';
 import { formatDateTime, timeAgo, STATUS_COLORS, getStatusLabel } from '@/lib/format';
 import {
@@ -27,11 +27,9 @@ type Tab = 'list' | 'new' | 'detail';
 interface ImportsProps {
   openDraftId?: string | null;
   onDraftOpened?: () => void;
-  intakePrefill?: (SourceIntakeContext & { sourceUrl: string }) | null;
-  onIntakePrefillLoaded?: () => void;
 }
 
-export function Imports({ openDraftId = null, onDraftOpened, intakePrefill = null, onIntakePrefillLoaded }: ImportsProps) {
+export function Imports({ openDraftId = null, onDraftOpened }: ImportsProps) {
   const [tab, setTab] = useState<Tab>('list');
   const [drafts, setDrafts] = useState<MobileBgDraft[]>([]);
   const [imports, setImports] = useState<ImportRecord[]>([]);
@@ -42,29 +40,12 @@ export function Imports({ openDraftId = null, onDraftOpened, intakePrefill = nul
   const [sourceUrl, setSourceUrl] = useState('');
   const [intakeError, setIntakeError] = useState<string | null>(null);
   const [creatingFromUrl, setCreatingFromUrl] = useState(false);
-  const [intakeContext, setIntakeContext] = useState<SourceIntakeContext | null>(null);
-  const [intakeNotice, setIntakeNotice] = useState<string | null>(null);
   useEffect(() => {
     if (!openDraftId) return;
     setSelectedDraftId(openDraftId);
     setTab('detail');
     onDraftOpened?.();
   }, [openDraftId, onDraftOpened]);
-
-  useEffect(() => {
-    if (!intakePrefill) return;
-    setSourceUrl(intakePrefill.sourceUrl);
-    setIntakeContext({
-      origin: intakePrefill.origin,
-      catalogPermanentId: intakePrefill.catalogPermanentId,
-      title: intakePrefill.title,
-      fields: intakePrefill.fields,
-      fieldSources: intakePrefill.fieldSources,
-    });
-    setIntakeError(null);
-    setIntakeNotice('Линкът от каталога е поставен в същото поле. Прегледай го и натисни „Обработи линка“.');
-    onIntakePrefillLoaded?.();
-  }, [intakePrefill, onIntakePrefillLoaded]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -98,7 +79,6 @@ export function Imports({ openDraftId = null, onDraftOpened, intakePrefill = nul
   async function handleNewDraft() {
     const rawUrl = sourceUrl.trim();
     setIntakeError(null);
-    setIntakeNotice(null);
 
     if (!rawUrl) {
       setTab('new');
@@ -108,14 +88,10 @@ export function Imports({ openDraftId = null, onDraftOpened, intakePrefill = nul
 
     setCreatingFromUrl(true);
     try {
-      const draft = await createDraftFromSourceUrl({
-        sourceUrl: rawUrl,
-        context: intakeContext || { origin: 'LINK_FIELD' },
-      });
+      const draft = await createDraftFromSourceUrl(rawUrl, 'LINK_FIELD');
 
       setSourceUrl('');
-      setIntakeContext(null);
-      if (!draft.wasCreated) setIntakeNotice('Този линк вече има активна чернова. Отварям я вместо да създам дубликат.');
+      if (!draft.wasCreated) window.alert('Този линк вече има активна чернова. Отварям я вместо да създам дубликат.');
       setSelectedDraftId(draft.id);
       setTab('detail');
     } catch (error) {
@@ -157,7 +133,7 @@ export function Imports({ openDraftId = null, onDraftOpened, intakePrefill = nul
           <input
             type="url"
             value={sourceUrl}
-            onChange={e => { setSourceUrl(e.target.value); setIntakeContext(null); setIntakeNotice(null); }}
+            onChange={e => setSourceUrl(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') handleNewDraft(); }}
             placeholder="Постави линк към автомобилна обява..."
             className="h-9 w-64 rounded-md border border-slate-200 bg-white px-3 text-xs text-slate-700 outline-none placeholder:text-slate-400 focus:border-blue-400 lg:w-80"
@@ -168,7 +144,6 @@ export function Imports({ openDraftId = null, onDraftOpened, intakePrefill = nul
         </div>
       </div>
       {intakeError && <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">{intakeError}</div>}
-      {intakeNotice && <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">{intakeNotice}</div>}
 
       {/* KPI cards */}
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
