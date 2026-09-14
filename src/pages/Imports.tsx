@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { createDraftFromSourceUrl } from '@/lib/draft_create';
+import { composeRoyalCarsDescription, ROYAL_CARS_PUBLISH_DEFAULTS } from '@/lib/company_profile';
 import { Badge } from '@/components/Badge';
 import { formatDateTime, timeAgo, STATUS_COLORS, getStatusLabel } from '@/lib/format';
 import {
@@ -26,7 +27,9 @@ const MOBILE_BG_VISIBLE_FIELD_KEYS = new Set([
   'category', 'make', 'model', 'modification', 'fuel', 'condition',
   'power', 'euro_standard', 'gearbox', 'displacement', 'price', 'currency',
   'mileage', 'year', 'month', 'color', 'location', 'vin',
-  'final_description', 'phone', 'email', 'mobile_bg_profile',
+  'title', 'description', 'final_description',
+  'seller_name', 'phone', 'email', 'mobile_bg_profile', 'ad_type',
+  'source_type', 'source_url', 'source_listing_id',
 ]);
 
 function mobileBgVisibleFieldsBySection(section: FieldSection): MobileBgFieldDef[] {
@@ -830,6 +833,72 @@ function ImagesSection() {
 // Draft Detail View
 // ============================================================
 
+function draftSourceTypeLabel(sourceType: string | null | undefined): string {
+  const normalized = (sourceType || '').toLowerCase();
+  if (normalized.includes('encar')) return 'Encar';
+  if (normalized.includes('autotrader')) return 'AutoTrader';
+  return 'Каталог';
+}
+
+function draftAutofillRows(draft: MobileBgDraft, loadedFields: MobileBgDraftField[]) {
+  const values = new Map(
+    loadedFields.map(field => [field.field_key, String(field.value || '').trim()]),
+  );
+  const value = (key: string) => values.get(key) || '';
+  const sourceType = draftSourceTypeLabel(draft.source_type);
+  const make = value('make');
+  const model = value('model');
+  const year = value('year');
+  const generatedTitle = (draft.title || value('title') || [make, model, year].filter(Boolean).join(' ') || 'Автомобил').trim();
+  const generatedDescription = value('description') || composeRoyalCarsDescription();
+  const sourceLocation = sourceType === 'AutoTrader'
+    ? 'Извън страната → Канада'
+    : sourceType === 'Encar'
+      ? 'Извън страната → Южна Корея'
+      : 'България';
+
+  const defaults: Record<string, string> = {
+    title: generatedTitle,
+    description: generatedDescription,
+    final_description: value('final_description') || generatedDescription,
+    seller_name: ROYAL_CARS_PUBLISH_DEFAULTS.seller_name,
+    phone: ROYAL_CARS_PUBLISH_DEFAULTS.phone,
+    ad_type: ROYAL_CARS_PUBLISH_DEFAULTS.ad_type,
+    source_type: sourceType,
+    location: value('location') || sourceLocation,
+  };
+  const sources: Record<string, string> = {
+    title: 'agent',
+    description: 'broker',
+    final_description: 'broker',
+    seller_name: 'broker',
+    phone: 'broker',
+    ad_type: 'broker',
+    source_type: 'agent',
+    location: 'agent',
+  };
+
+  const now = new Date().toISOString();
+  return Object.entries(defaults)
+    .filter(([key, fieldValue]) => Boolean(fieldValue) && !value(key))
+    .map(([key, fieldValue]) => {
+      const definition = MOBILE_BG_FIELD_MAP.find(field => field.key === key);
+      return {
+        draft_id: draft.id,
+        field_key: key,
+        mobile_bg_label: definition?.mobile_bg_label || key,
+        our_db_key: definition?.our_db_key || key,
+        value: fieldValue,
+        field_type: definition?.field_type || 'text',
+        source: sources[key] || 'agent',
+        proof: null,
+        validation_status: 'valid',
+        filled_at: now,
+        is_manual_edit: false,
+      };
+    });
+}
+
 function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void }) {
   const [draft, setDraft] = useState<MobileBgDraft | null>(null);
   const [fields, setFields] = useState<MobileBgDraftField[]>([]);
@@ -855,10 +924,29 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
         supabase.from('mobile_bg_dedup_checks').select('*').eq('draft_id', draftId).order('created_at', { ascending: false }),
         supabase.from('mobile_bg_publish_jobs').select('*').eq('draft_id', draftId).maybeSingle(),
       ]);
-      setDraft((dRes.data || null) as MobileBgDraft | null);
+      const loadedDraft = (dRes.data || null) as MobileBgDraft | null;
       const loadedFields = (fRes.data || []) as MobileBgDraftField[];
-      setFields(loadedFields);
-      setEditValues(Object.fromEntries(loadedFields.map(field => [field.field_key, field.value || ''])));
+      let effectiveFields = loadedFields;
+      if (loadedDraft) {
+        const autofillRows = draftAutofillRows(loadedDraft, loadedFields);
+        if (autofillRows.length > 0) {
+          const { error: autofillError } = await supabase
+            .from('mobile_bg_draft_fields')
+            .upsert(autofillRows, { onConflict: 'draft_id,field_key' });
+          if (!autofillError) {
+            effectiveFields = [...loadedFields, ...autofillRows] as MobileBgDraftField[];
+            await supabase.from('mobile_bg_draft_action_log').insert({
+              draft_id: loadedDraft.id,
+              action: 'PUBLISH_FIELDS_AUTOFILLED',
+              actor: 'Агент',
+              details: { fields: autofillRows.map(row => row.field_key) },
+            });
+          }
+        }
+      }
+      setDraft(loadedDraft);
+      setFields(effectiveFields);
+      setEditValues(Object.fromEntries(effectiveFields.map(field => [field.field_key, field.value || ''])));
       setExtras((eRes.data || []) as MobileBgDraftExtra[]);
       setImages((iRes.data || []) as MobileBgDraftImage[]);
       setLogs((lRes.data || []) as MobileBgDraftActionLog[]);
@@ -877,6 +965,7 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
         .concat(mobileBgVisibleFieldsBySection('price'))
         .concat(mobileBgVisibleFieldsBySection('description'))
         .concat(mobileBgVisibleFieldsBySection('publishing'))
+        .concat(mobileBgVisibleFieldsBySection('source_control'))
         .filter((def, index, all) => all.findIndex(item => item.key === def.key) === index)
         .map(def => ({
           draft_id: draftId,
@@ -989,7 +1078,7 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
       </div>
 
       {/* Full Mobile.bg mirror: every field stays visible, even while extraction is pending */}
-      {(['basic', 'price', 'description', 'publishing'] as FieldSection[]).map(section => {
+      {(['basic', 'price', 'description', 'publishing', 'source_control'] as FieldSection[]).map(section => {
         const definitions = mobileBgVisibleFieldsBySection(section);
         return (
           <div key={section} className="rounded-md border border-slate-200 bg-white shadow-sm">
