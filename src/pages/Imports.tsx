@@ -880,8 +880,12 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
   if (loading) return <div className="flex items-center justify-center h-96 text-slate-400">Зареждане...</div>;
   if (!draft) return <div className="text-center text-slate-400 py-12">Черновата не е намерена</div>;
 
-  const selectedExtras = extras.filter(e => e.selected);
-  const groupedExtras = EXTRA_GROUPS.map(g => ({ group: g, items: selectedExtras.filter(e => e.group_name === g) })).filter(g => g.items.length > 0);
+  const fieldsByKey = new Map(fields.map(field => [field.field_key, field]));
+  const extrasByKey = new Map(extras.map(extra => [extra.extra_key, extra]));
+  const groupedExtras = EXTRA_GROUPS.map(group => ({
+    group,
+    items: extrasByGroup(group).map(def => ({ def, saved: extrasByKey.get(def.key) })),
+  }));
 
   return (
     <div className="space-y-3">
@@ -900,7 +904,7 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
         </div>
         <div className="flex items-center gap-2">
           <Badge color={DRAFT_STATUS_COLORS[draft.status] || 'slate'}>{DRAFT_STATUS_LABELS_BG[draft.status] || draft.status}</Badge>
-          <button onClick={queuePublish} disabled={queuingPublish || publishJob?.status === 'RUNNING'} className="rounded-md bg-emerald-600 px-3 py-2 text-xs font-bold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">
+          <button onClick={queuePublish} disabled={queuingPublish || publishJob?.status === 'RUNNING' || draft.extraction_status === 'SOURCE_PENDING'} className="rounded-md bg-emerald-600 px-3 py-2 text-xs font-bold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">
             {queuingPublish ? 'Подготвяне…' : 'Публикувай (ръчно потвърждение)'}
           </button>
         </div>
@@ -920,13 +924,9 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
         {publishJob && <span className="ml-1 font-bold">Последна заявка: {publishJob.status}{publishJob.last_error ? ` — ${publishJob.last_error}` : ''}</span>}
       </div>
 
-      {/* Fields by section */}
+      {/* Full Mobile.bg mirror: every field stays visible, even while extraction is pending */}
       {(['basic', 'price', 'description', 'publishing', 'source_control'] as FieldSection[]).map(section => {
-        const sectionFields = fields.filter(f => {
-          const def = MOBILE_BG_FIELD_MAP.find(m => m.key === f.field_key);
-          return def && def.section === section;
-        });
-        if (sectionFields.length === 0) return null;
+        const definitions = fieldsBySection(section);
         return (
           <div key={section} className="rounded-md border border-slate-200 bg-white shadow-sm">
             <div className="px-3 py-2 border-b border-slate-100">
@@ -934,68 +934,86 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
             </div>
             <div className="p-3">
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {sectionFields.map(f => (
-                  <div key={f.id} className="rounded border border-slate-200 p-2">
-                    <p className="text-[10px] font-bold text-slate-700">{f.mobile_bg_label}</p>
-                    <p className="text-[11px] text-slate-800 mt-0.5">{f.value || '—'}</p>
-                    <div className="flex items-center gap-2 mt-1 text-[9px] text-slate-400">
-                      <span>Източник: {SOURCE_LABELS_BG[f.source] || f.source}</span>
-                      {f.is_manual_edit && <span className="text-amber-600"><Edit3 className="inline h-2.5 w-2.5" /> ръчно</span>}
-                      {f.proof && <span>· доказателство: {f.proof}</span>}
+                {definitions.map(def => {
+                  const saved = fieldsByKey.get(def.key);
+                  return (
+                    <div key={def.key} className={`rounded border p-2 ${saved?.value ? 'border-slate-200' : def.required ? 'border-amber-200 bg-amber-50/40' : 'border-slate-200'}`}>
+                      <p className="text-[10px] font-bold text-slate-700">{def.mobile_bg_label}{def.required ? ' *' : ''}</p>
+                      <p className={`mt-0.5 text-[11px] ${saved?.value ? 'text-slate-800' : 'italic text-slate-400'}`}>
+                        {saved?.value || 'Очаква попълване'}
+                      </p>
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-[9px] text-slate-400">
+                        <span>Източник: {saved ? (SOURCE_LABELS_BG[saved.source] || saved.source) : (SOURCE_LABELS_BG[def.source] || def.source)}</span>
+                        {saved?.is_manual_edit && <span className="text-amber-600"><Edit3 className="inline h-2.5 w-2.5" /> ръчно</span>}
+                        {saved?.proof && <span className="break-all">· доказателство: {saved.proof}</span>}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </div>
         );
       })}
 
-      {/* Extras */}
-      {groupedExtras.length > 0 && (
-        <div className="rounded-md border border-slate-200 bg-white shadow-sm">
-          <div className="px-3 py-2 border-b border-slate-100">
-            <h3 className="text-sm font-bold text-slate-800">3. Екстри</h3>
-          </div>
-          <div className="p-3 space-y-2">
-            {groupedExtras.map(g => (
-              <div key={g.group}>
-                <p className="text-xs font-bold text-slate-600 mb-1">{g.group}</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {g.items.map(e => (
-                    <Badge key={e.id} color="emerald">{e.mobile_bg_label}</Badge>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
+      {/* Complete Mobile.bg extras mirror */}
+      <div className="rounded-md border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-100 px-3 py-2">
+          <h3 className="text-sm font-bold text-slate-800">3. Екстри</h3>
         </div>
-      )}
-
-      {/* Images */}
-      {images.length > 0 && (
-        <div className="rounded-md border border-slate-200 bg-white shadow-sm">
-          <div className="px-3 py-2 border-b border-slate-100">
-            <h3 className="text-sm font-bold text-slate-800">5. Снимки</h3>
-          </div>
-          <div className="p-3">
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
-              {images.map(img => (
-                <div key={img.id} className="rounded border border-slate-200 p-2 text-center">
-                  <div className="flex items-center justify-center h-20 rounded bg-slate-100 text-slate-400">
-                    <ImageIcon className="h-6 w-6" />
+        <div className="grid grid-cols-1 gap-4 p-3 sm:grid-cols-2 lg:grid-cols-4">
+          {groupedExtras.map(({ group, items }) => (
+            <div key={group}>
+              <p className="mb-2 text-xs font-bold text-slate-700">{group}</p>
+              <div className="space-y-1.5">
+                {items.map(({ def, saved }) => (
+                  <div key={def.key} className="flex items-start gap-2 text-[11px] text-slate-700">
+                    <span className={`mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border ${saved?.selected ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-slate-300 bg-white'}`}>
+                      {saved?.selected ? '✓' : ''}
+                    </span>
+                    <span>{def.mobile_bg_label}</span>
                   </div>
-                  <p className="mt-1 text-[9px] text-slate-500">
-                    {img.is_main ? '★ Основна' : `#${img.display_order}`}
-                    {' · '}
-                    {img.processing_status}
-                  </p>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          </div>
+          ))}
         </div>
-      )}
+      </div>
+
+      {/* Extracted source images */}
+      <div className="rounded-md border border-slate-200 bg-white shadow-sm">
+        <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
+          <h3 className="text-sm font-bold text-slate-800">5. Снимки</h3>
+          <span className="text-[10px] text-slate-500">{images.length ? `${images.length} извлечени` : draft.extraction_status === 'SOURCE_PENDING' ? 'Извличат се…' : 'Няма извлечени снимки'}</span>
+        </div>
+        <div className="p-3">
+          {images.length ? (
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
+              {images.map(img => {
+                const imageUrl = img.local_path || img.source_url;
+                return (
+                  <div key={img.id} className="overflow-hidden rounded border border-slate-200 bg-white">
+                    {imageUrl ? (
+                      <a href={imageUrl} target="_blank" rel="noopener noreferrer">
+                        <img src={imageUrl} alt={img.is_main ? 'Основна снимка' : `Снимка ${img.display_order}`} className="h-28 w-full bg-slate-100 object-cover" loading="lazy" referrerPolicy="no-referrer" />
+                      </a>
+                    ) : (
+                      <div className="flex h-28 items-center justify-center bg-slate-100 text-slate-400"><ImageIcon className="h-6 w-6" /></div>
+                    )}
+                    <p className="px-2 py-1 text-[9px] text-slate-500">
+                      {img.is_main ? '★ Основна' : `#${img.display_order}`} · {img.processing_status}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="flex min-h-24 items-center justify-center rounded border border-dashed border-slate-300 text-xs text-slate-400">
+              {draft.extraction_status === 'SOURCE_PENDING' ? 'Черновата е създадена. Изчаква извличане на данни и снимки.' : 'Източникът не е върнал снимки.'}
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* Dedup checks */}
       {dedupChecks.length > 0 && (
