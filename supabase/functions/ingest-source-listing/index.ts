@@ -148,7 +148,6 @@ Deno.serve(async (request) => {
   if (fields.length === 0) return response({ error: 'JSON трябва да съдържа поне едно поле в fields.' }, 400);
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
-  const serviceRole = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
   if (!supabaseUrl || !serviceRole) return response({ error: 'Supabase server configuration is incomplete.' }, 500);
   const db = createClient(supabaseUrl, serviceRole, { auth: { persistSession: false } });
 
