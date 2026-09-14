@@ -86,6 +86,19 @@ jobs:
           sudo install -m 600 /tmp/mobile-publisher.env /etc/aicc-mobile-publisher.env
           rm -f /tmp/dist.tar.gz /tmp/worker.tar.gz /tmp/mobile-publisher.tar.gz /tmp/mobile-publisher.env
 
+          SOURCE_KEY=""
+          for UNIT_NAME in $(systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '$1 ~ /(source|intake|worker|import)/ {print $1}'); do
+            UNIT_ENV="$(sudo systemctl show "$UNIT_NAME" --property=Environment --value 2>/dev/null || true)"
+            CANDIDATE_KEY="$(printf '%s' "$UNIT_ENV" | tr ' ' '\n' | sed -n 's/^SUPABASE_SERVICE_ROLE_KEY=//p' | head -n 1)"
+            if [ -n "$CANDIDATE_KEY" ]; then
+              SOURCE_KEY="$CANDIDATE_KEY"
+              break
+            fi
+          done
+          if [ -n "$SOURCE_KEY" ]; then
+            printf 'SUPABASE_SERVICE_ROLE_KEY=%s\n' "$SOURCE_KEY" | sudo tee -a /etc/aicc-mobile-publisher.env >/dev/null
+          fi
+
           NPM_BIN="$(command -v npm)"
           SOURCE_ENV_FILE="$(systemctl show source-intake-worker.service --property=EnvironmentFiles --value 2>/dev/null | tr ' ' '\n' | sed 's/^-//' | awk 'NF {print; exit}')"
           SOURCE_ENV_LINE=""
