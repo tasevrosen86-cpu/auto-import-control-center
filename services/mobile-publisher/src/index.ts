@@ -63,6 +63,48 @@ async function loginIfNeeded(page: Page) {
   return await page.locator('input[type="password"]').count() === 0 ? 'logged_in' : 'login_failed';
 }
 
+async function clickVisibleButton(page: Page, selectors: string[]) {
+  for (const selector of selectors) {
+    const buttons = page.locator(selector);
+    const count = await buttons.count();
+    for (let index = count - 1; index >= 0; index -= 1) {
+      const button = buttons.nth(index);
+      if (await button.isVisible().catch(() => false) && await button.isEnabled().catch(() => false)) {
+        await button.click();
+        await page.waitForLoadState('domcontentloaded').catch(() => undefined);
+        await page.waitForTimeout(800);
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+async function submitLiveListing(page: Page) {
+  const continueSelectors = [
+    'button:has-text("Продължи")',
+    'input[type="submit"][value*="Продължи"]',
+    'button:has-text("Напред")',
+    'input[type="submit"][value*="Напред"]',
+    'button:has-text("Следваща")',
+    'input[type="submit"][value*="Следваща"]',
+  ];
+  const finalSelectors = [
+    'button:has-text("Публикувай")',
+    'input[type="submit"][value*="Публикувай"]',
+    'button:has-text("Изпрати")',
+    'input[type="submit"][value*="Изпрати"]',
+    'button:has-text("Потвърди")',
+    'input[type="submit"][value*="Потвърди"]',
+  ];
+  const advanced: string[] = [];
+  for (let step = 0; step < 3; step += 1) {
+    if (await clickVisibleButton(page, finalSelectors)) return { submitted: true, advanced };
+    if (!await clickVisibleButton(page, continueSelectors)) return { submitted: false, advanced };
+    advanced.push(page.url());
+  }
+  return { submitted: await clickVisibleButton(page, finalSelectors), advanced };
+}
 async function selectText(page: Page, selector: string, wanted: string) {
   const select = page.locator(selector).first();
   const normalized = wanted.trim().toLocaleLowerCase('bg');
@@ -158,7 +200,14 @@ async function run() {
     const result = await populateStepOne(page, fieldResult.data || [], extraResult.data || []);
     const screenshotPath = `/tmp/mobile-bg-${job.id}.png`;
     await page.screenshot({ path: screenshotPath, fullPage: true });
-    if (job.mode === 'LIVE') return await finish(job, 'NEEDS_CONFIGURATION', { ...result, url: page.url() }, 'Публикуването на живо е блокирано, докато стъпки 2 и 3 не бъдат проверени с тестова обява.');
+    if (job.mode === 'LIVE') {
+      const submission = await submitLiveListing(page);
+      await page.screenshot({ path: screenshotPath, fullPage: true });
+      if (!submission.submitted) {
+        return await finish(job, 'NEEDS_CONFIGURATION', { ...result, ...submission, url: page.url(), login_state: loginState, screenshot_path: screenshotPath }, 'Mobile.bg не показа финален бутон за публикуване или изисква допълнителни полета/снимки.');
+      }
+      return await finish(job, 'COMPLETED', { ...result, ...submission, url: page.url(), login_state: loginState, screenshot_path: screenshotPath, message: 'Тестовата обява е изпратена към Mobile.bg.' });
+    }
     await finish(job, 'PREVIEW_READY', { ...result, url: page.url(), login_state: loginState, screenshot_path: screenshotPath, message: 'Стъпка 1 е попълнена без изпращане към Mobile.bg.' });
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : 'Непозната грешка.';
