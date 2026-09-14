@@ -141,11 +141,7 @@ jobs:
             exit 1
           fi
           sudo systemctl --no-pager --full status aicc-mobile-publisher.service || true
-          set -a
-          . /etc/aicc-mobile-publisher.env
-          set +a
-          cd "$PUBLISHER_DIR"
-          node --input-type=module <<'NODE'
+          sudo bash -c 'set -a; . /etc/aicc-mobile-publisher.env; set +a; cd /home/ubuntu/auto-import-control-center/services/mobile-publisher; node --input-type=module' <<'NODE'
           import { createClient } from '@supabase/supabase-js';
           const db = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY);
           const { data, error } = await db
