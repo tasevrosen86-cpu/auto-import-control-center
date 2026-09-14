@@ -117,7 +117,11 @@ jobs:
 
           sudo systemctl daemon-reload
           sudo systemctl enable --now aicc-mobile-publisher.timer
-          sudo systemctl start aicc-mobile-publisher.service || true
+          if ! sudo systemctl start aicc-mobile-publisher.service; then
+            sudo journalctl -u aicc-mobile-publisher.service -n 80 --no-pager
+            exit 1
+          fi
+          sudo systemctl --no-pager --full status aicc-mobile-publisher.service || true
           sudo systemctl reload nginx
           REMOTE_SCRIPT
 
