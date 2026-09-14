@@ -11,6 +11,7 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -43,6 +44,6 @@ jobs:
           VPS_PORT: ${{ secrets.VPS_PORT || 22 }}
         run: |
           tar -C dist -czf dist.tar.gz .
-          tar -C services/source-intake-worker -czf worker.tar.gz src package.json package-lock.json tsconfig.json
+          tar -C services/source-intake-worker -czf worker.tar.gz src package.json
           scp -P "$VPS_PORT" dist.tar.gz worker.tar.gz "$VPS_USER@$VPS_HOST:/tmp/"
-          ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" 'rm -rf /tmp/auto-import-control-center-dist && mkdir -p /tmp/auto-import-control-center-dist && tar -xzf /tmp/dist.tar.gz -C /tmp/auto-import-control-center-dist && sudo cp -a /tmp/auto-import-control-center-dist/. /var/www/html/ && tar -xzf /tmp/worker.tar.gz -C /home/ubuntu/auto-import-control-center/services/source-intake-worker && sudo systemctl reload nginx'
+          ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" "rm -rf /tmp/auto-import-control-center-dist && mkdir -p /tmp/auto-import-control-center-dist && tar -xzf /tmp/dist.tar.gz -C /tmp/auto-import-control-center-dist && sudo cp -a /tmp/auto-import-control-center-dist/. /var/www/html/ && tar -xzf /tmp/worker.tar.gz -C /home/ubuntu/auto-import-control-center/services/source-intake-worker && sudo systemctl reload nginx"
