@@ -192,7 +192,7 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string)
   const displacement = numberText(nested(vehicle, 'vehicleEngine', ['engineDisplacement', 'displacement']) || firstValue(vehicle, ['engineDisplacement', 'displacement']));
   const price = nested(vehicle, 'offers', ['price']) || firstValue(vehicle, ['price', 'salePrice']);
   const currency = nested(vehicle, 'offers', ['priceCurrency']) || firstValue(vehicle, ['priceCurrency', 'currency']);
-  const description = firstValue(vehicle, ['description']);
+  const description = companyDescription;
   const fields: Array<{ key: string; value: string; source: string; proof: string }> = [];
   const push = (key: string, value: string | null) => { if (value) fields.push({ key, value, source, proof: job.source_url }); };
 
@@ -212,10 +212,9 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string)
   push('vin', firstValue(vehicle, ['vehicleIdentificationNumber', 'vin']));
   push('condition', normalizeCondition(firstValue(vehicle, ['itemCondition', 'condition'])));
   push('drivetrain', firstValue(vehicle, ['driveWheelConfiguration', 'drivetrain', 'driveType']));
-  const finalDescription = [description, companyDescription].filter(Boolean).join('\\n\\n');
-  push('description', finalDescription);
-  push('auto_description', description);
-  push('final_description', finalDescription);
+  push('description', description);
+  push('final_description', description);
+  push('location', source === 'encar' ? 'Извън страната → Южна Корея' : 'Извън страната → Канада');
   push('seller_name', 'RoyalCarsBG');
   push('phone', '0887353653');
   push('ad_type', 'Стандартна');
