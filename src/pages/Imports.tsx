@@ -22,6 +22,22 @@ import type {
   MobileBgPublishJob,
 } from '@/types';
 
+const MOBILE_BG_VISIBLE_FIELD_KEYS = new Set([
+  'category', 'make', 'model', 'modification', 'fuel', 'condition',
+  'power', 'euro_standard', 'gearbox', 'displacement', 'price', 'currency',
+  'mileage', 'year', 'month', 'color', 'location', 'vin',
+  'final_description', 'phone', 'email', 'mobile_bg_profile',
+]);
+
+function mobileBgVisibleFieldsBySection(section: FieldSection): MobileBgFieldDef[] {
+  if (section === 'basic') {
+    const base = fieldsBySection('basic').filter(field => MOBILE_BG_VISIBLE_FIELD_KEYS.has(field.key));
+    const location = MOBILE_BG_FIELD_MAP.find(field => field.key === 'location');
+    return location ? [...base, location] : base;
+  }
+  return fieldsBySection(section).filter(field => MOBILE_BG_VISIBLE_FIELD_KEYS.has(field.key));
+}
+
 type Tab = 'list' | 'new' | 'detail';
 
 interface ImportsProps {
@@ -503,8 +519,8 @@ function DraftEditor({ sourceUrl, onBack, onSave }: DraftEditorProps) {
       )}
 
       {/* Sections */}
-      {(['basic', 'price', 'extras', 'description', 'images', 'publishing', 'source_control'] as FieldSection[]).map(section => {
-        const fields = fieldsBySection(section);
+      {(['basic', 'price', 'extras', 'description', 'images', 'publishing'] as FieldSection[]).map(section => {
+        const fields = section === 'extras' || section === 'images' ? fieldsBySection(section) : mobileBgVisibleFieldsBySection(section);
         const isExpanded = expandedSections.has(section);
         return (
           <div key={section} className="rounded-md border border-slate-200 bg-white shadow-sm">
@@ -925,8 +941,8 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
       </div>
 
       {/* Full Mobile.bg mirror: every field stays visible, even while extraction is pending */}
-      {(['basic', 'price', 'description', 'publishing', 'source_control'] as FieldSection[]).map(section => {
-        const definitions = fieldsBySection(section);
+      {(['basic', 'price', 'description', 'publishing'] as FieldSection[]).map(section => {
+        const definitions = mobileBgVisibleFieldsBySection(section);
         return (
           <div key={section} className="rounded-md border border-slate-200 bg-white shadow-sm">
             <div className="px-3 py-2 border-b border-slate-100">
@@ -938,7 +954,7 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
                   const saved = fieldsByKey.get(def.key);
                   return (
                     <div key={def.key} className={`rounded border p-2 ${saved?.value ? 'border-slate-200' : def.required ? 'border-amber-200 bg-amber-50/40' : 'border-slate-200'}`}>
-                      <p className="text-[10px] font-bold text-slate-700">{def.mobile_bg_label}{def.required ? ' *' : ''}</p>
+                      <p className="text-[10px] font-bold text-slate-700">{def.key === 'final_description' ? 'Допълнителна информация' : def.mobile_bg_label}{def.required ? ' *' : ''}</p>
                       <p className={`mt-0.5 text-[11px] ${saved?.value ? 'text-slate-800' : 'italic text-slate-400'}`}>
                         {saved?.value || 'Очаква попълване'}
                       </p>
