@@ -29,7 +29,6 @@ export function createDraftSeed(vehicle: Vehicle, marketplaces: VehicleMarketpla
   const sourceLabel = source?.marketplace === 'korea' ? 'Encar' : source?.marketplace === 'canada' ? 'AutoTrader' : 'Каталог';
   const salePrice = vehicle.our_price_eur ?? source?.final_eur ?? null;
   const sourceUrl = source?.listing_url || null;
-  const sourceDescription = asText(raw.description || raw.description_bg || raw.description_en);
   const fields: Record<string, string> = {
     category: 'Автомобили и джипове',
     title: `${vehicle.make} ${vehicle.model} ${vehicle.model_year}`,
@@ -52,14 +51,14 @@ export function createDraftSeed(vehicle: Vehicle, marketplaces: VehicleMarketpla
     currency: 'EUR',
     our_calculated_price: asText(vehicle.our_price_eur),
     calc_source: sourceLabel,
+    location: source?.marketplace === 'canada' ? 'Извън страната → Канада' : source?.marketplace === 'korea' ? 'Извън страната → Южна Корея' : '',
     source_type: sourceLabel,
     source_url: sourceUrl || '',
     source_listing_id: asText(source?.listing_id),
     source_vin: asText(source?.vin),
-    source_price: asText(source?.final_eur),
-    description: composeRoyalCarsDescription(sourceDescription),
-    auto_description: sourceDescription,
-    final_description: composeRoyalCarsDescription(sourceDescription),
+    source_price: asText(source?.price_native),
+    description: composeRoyalCarsDescription(),
+    final_description: composeRoyalCarsDescription(),
     ...ROYAL_CARS_PUBLISH_DEFAULTS,
   };
 
