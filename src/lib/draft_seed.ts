@@ -1,4 +1,5 @@
 import type { Vehicle, VehicleMarketplace } from '@/types';
+import { composeRoyalCarsDescription, ROYAL_CARS_PUBLISH_DEFAULTS } from '@/lib/company_profile';
 
 export interface DraftSeed {
   catalogPermanentId: number;
@@ -28,11 +29,14 @@ export function createDraftSeed(vehicle: Vehicle, marketplaces: VehicleMarketpla
   const sourceLabel = source?.marketplace === 'korea' ? 'Encar' : source?.marketplace === 'canada' ? 'AutoTrader' : 'Каталог';
   const salePrice = vehicle.our_price_eur ?? source?.final_eur ?? null;
   const sourceUrl = source?.listing_url || null;
+  const sourceDescription = asText(raw.description || raw.description_bg || raw.description_en);
   const fields: Record<string, string> = {
     category: 'Автомобили и джипове',
+    title: `${vehicle.make} ${vehicle.model} ${vehicle.model_year}`,
     make: vehicle.make,
     model: vehicle.model,
     year: asText(vehicle.model_year),
+    month: source?.marketplace === 'canada' ? 'Декември' : asText(raw.production_month || raw.month),
     mileage: asText(source?.mileage_km ?? raw.mileage_km),
     fuel: vehicle.fuel,
     gearbox: asText(raw.gearbox),
@@ -53,10 +57,14 @@ export function createDraftSeed(vehicle: Vehicle, marketplaces: VehicleMarketpla
     source_listing_id: asText(source?.listing_id),
     source_vin: asText(source?.vin),
     source_price: asText(source?.final_eur),
+    description: composeRoyalCarsDescription(sourceDescription),
+    auto_description: sourceDescription,
+    final_description: composeRoyalCarsDescription(sourceDescription),
+    ...ROYAL_CARS_PUBLISH_DEFAULTS,
   };
 
   const fieldSources: Record<string, string> = Object.fromEntries(
-    Object.keys(fields).map(key => [key, ['category', 'make', 'model', 'year', 'fuel'].includes(key) ? 'catalog' : sourceKind]),
+    Object.keys(fields).map(key => [key, ['category', 'make', 'model', 'year', 'fuel'].includes(key) ? 'catalog' : (Object.prototype.hasOwnProperty.call(ROYAL_CARS_PUBLISH_DEFAULTS, key) || ['description', 'final_description'].includes(key) ? 'company_profile' : sourceKind)]),
   );
 
   return {
