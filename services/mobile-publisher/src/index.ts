@@ -117,10 +117,31 @@ async function finish(job: PublishJob, status: string, details: Record<string, u
 }
 
 async function run() {
-  const { data, error } = await db.rpc('claim_mobile_bg_publish_job', { worker_name: workerName });
-  if (error) throw error;
-  const job = (data?.[0] || null) as PublishJob | null;
-  if (!job) return console.log('Няма чакаща заявка за публикуване.');
+  const { data: candidate, error: findError } = await db
+    .from('mobile_bg_publish_jobs')
+    .select('id,draft_id,mode')
+    .eq('status', 'QUEUED')
+    .order('requested_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (findError) throw findError;
+  if (!candidate) return console.log('Няма чакаща заявка за публикуване.');
+
+  const { data: claimed, error: claimError } = await db
+    .from('mobile_bg_publish_jobs')
+    .update({
+      status: 'RUNNING',
+      worker_name: workerName,
+      started_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', candidate.id)
+    .eq('status', 'QUEUED')
+    .select('id,draft_id,mode')
+    .maybeSingle();
+  if (claimError) throw claimError;
+  const job = (claimed || null) as PublishJob | null;
+  if (!job) return console.log('Заявката вече се обработва от друг worker.');
   const [fieldResult, extraResult] = await Promise.all([
     db.from('mobile_bg_draft_fields').select('field_key,value').eq('draft_id', job.draft_id),
     db.from('mobile_bg_draft_extras').select('mobile_bg_label,selected').eq('draft_id', job.draft_id).eq('selected', true),
