@@ -854,7 +854,7 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
       window.alert(`Не могат да се изпратят данните без: ${readiness.missing.join(', ')}`);
       return;
     }
-    if (!window.confirm('Изпращам черновата към нашия Mobile.bg бот. Ботът ще отвори браузър само за тази заявка. Продължаваме?')) return;
+    if (!window.confirm('Подготвям формата в Mobile.bg за ръчна проверка. Няма да има финално изпращане или публикуване. Продължаваме?')) return;
     setQueuingPublish(true);
     try {
       const now = new Date().toISOString();
@@ -901,7 +901,7 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
         <div className="flex items-center gap-2">
           <Badge color={DRAFT_STATUS_COLORS[draft.status] || 'slate'}>{DRAFT_STATUS_LABELS_BG[draft.status] || draft.status}</Badge>
           <button onClick={queuePublish} disabled={queuingPublish || publishJob?.status === 'RUNNING'} className="rounded-md bg-emerald-600 px-3 py-2 text-xs font-bold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">
-            {queuingPublish ? 'Изпращане…' : 'Публикувай'}
+            {queuingPublish ? 'Подготвяне…' : 'Публикувай (ръчно потвърждение)'}
           </button>
         </div>
       </div>
@@ -916,7 +916,7 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
       </div>
 
       <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
-        JSON данните се изпращат директно към нашата система. За Mobile.bg е избран „браузър при заявка“: стартира се само след този бутон и се изключва след задачата.
+        Този бутон само предава черновата към браузъра на Mobile.bg и попълва формата. Финалното публикуване остава ръчно и не се натиска от системата.
         {publishJob && <span className="ml-1 font-bold">Последна заявка: {publishJob.status}{publishJob.last_error ? ` — ${publishJob.last_error}` : ''}</span>}
       </div>
 
