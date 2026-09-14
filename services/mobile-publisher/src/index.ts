@@ -116,10 +116,10 @@ async function submitAndVerifyOnMobileBg(page: Page) {
   if (!clicked) return { submitted: false, verified: false, beforeUrl, afterUrl: page.url(), reason: 'Не е намерен точният финален бутон „Публикувай“.' };
   await page.waitForTimeout(1500);
   const afterUrl = page.url();
-  const bodyText = (await page.locator('body').innerText().catch(() => '')).replace(/\\s+/g, ' ').trim();
+  const bodyText = (await page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
   const confirmation = /обявата.{0,80}(публикувана|активна|създадена)|успешно.{0,80}(публику|обяв)|публикуването.{0,80}(успешно|завърши)/i.test(bodyText);
   const links = await page.locator('a[href]').evaluateAll(anchors => anchors.map(anchor => (anchor as HTMLAnchorElement).href).filter(Boolean));
-  const listingUrl = links.find(link => /mobile\\.bg/i.test(link) && /(act=4|adv=|obiava)/i.test(link)) || (/(act=4|adv=|obiava)/i.test(afterUrl) ? afterUrl : null);
+  const listingUrl = links.find(link => /mobile\.bg/i.test(link) && /(act=4|adv=|obiava)/i.test(link)) || (/(act=4|adv=|obiava)/i.test(afterUrl) ? afterUrl : null);
   const verified = Boolean(listingUrl || confirmation);
   return {
     submitted: true,
