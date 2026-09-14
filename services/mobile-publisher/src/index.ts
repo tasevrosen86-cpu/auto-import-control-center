@@ -84,62 +84,53 @@ async function clickVisibleButton(page: Page, selectors: string[]) {
   return false;
 }
 
-async function submitLiveListing(page: Page) {
-  const continueSelectors = [
+async function advanceFromDataStage(page: Page) {
+  const beforeUrl = page.url();
+  const selectors = [
     'button:has-text("Продължи")',
-    'input[type="submit"][value*="Продължи"]',
-    'button:has-text("Напред")',
-    'input[type="submit"][value*="Напред"]',
-    'button:has-text("Следваща")',
-    'input[type="submit"][value*="Следваща"]',
+    'input[type="submit"][value="Продължи"]',
+    'input[type="button"][value="Продължи"]',
   ];
-  const finalSelectors = [
-    'button:has-text("Публикувай")',
-    'input[type="submit"][value*="Публикувай"]',
-    'button:has-text("Изпрати")',
-    'input[type="submit"][value*="Изпрати"]',
-    'button:has-text("Потвърди")',
-    'input[type="submit"][value*="Потвърди"]',
-  ];
-  const advanced: string[] = [];
-  for (let step = 0; step < 3; step += 1) {
-    if (await clickVisibleButton(page, finalSelectors)) return { submitted: true, advanced };
-    if (!await clickVisibleButton(page, continueSelectors)) return { submitted: false, advanced };
-    advanced.push(page.url());
-  }
-  return { submitted: await clickVisibleButton(page, finalSelectors), advanced };
+  const clicked = await clickVisibleButton(page, selectors);
+  if (!clicked) return { advanced: false, beforeUrl, afterUrl: page.url(), reason: 'Не е намерен точният бутон „Продължи“.' };
+  const afterUrl = page.url();
+  const imageInputs = await page.locator('input[type="file"]').count();
+  const stageChanged = afterUrl !== beforeUrl || imageInputs > 0;
+  return {
+    advanced: stageChanged,
+    beforeUrl,
+    afterUrl,
+    image_inputs: imageInputs,
+    reason: stageChanged ? undefined : 'Mobile.bg не показа втория етап със снимките.',
+  };
 }
-async function uploadSelectedImages(page: Page, images: DraftImage[]) {
-  const selected = images.filter(image => image.is_selected).sort((a, b) => a.display_order - b.display_order);
-  if (selected.length === 0) return { uploaded: 0, skipped: ['Няма избрани снимки.'] };
-  const workDir = join(tmpdir(), 'aicc-mobile-bg-images');
-  await mkdir(workDir, { recursive: true });
-  const files: string[] = [];
-  const skipped: string[] = [];
-  try {
-    for (let index = 0; index < selected.length; index += 1) {
-      const image = selected[index];
-      const filePath = image.local_path && image.local_path.startsWith('/') ? image.local_path : join(workDir, `image-${index + 1}.jpg`);
-      if (!(image.local_path && image.local_path.startsWith('/'))) {
-        if (!image.source_url) { skipped.push(`Снимка #${index + 1}: липсва URL.`); continue; }
-        const response = await fetch(image.source_url);
-        if (!response.ok) { skipped.push(`Снимка #${index + 1}: HTTP ${response.status}.`); continue; }
-        await writeFile(filePath, Buffer.from(await response.arrayBuffer()));
-      }
-      files.push(filePath);
-    }
-    const inputs = page.locator('input[type="file"]');
-    const count = await inputs.count();
-    if (count === 0) return { uploaded: 0, skipped: [...skipped, 'Mobile.bg не показа поле за снимки.'] };
-    await inputs.first().setInputFiles(files);
-    await page.waitForTimeout(1000);
-    return { uploaded: files.length, skipped };
-  } finally {
-    for (const file of files) {
-      if (file.startsWith(workDir)) await rm(file, { force: true }).catch(() => undefined);
-    }
-    await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
-  }
+
+async function submitAndVerifyOnMobileBg(page: Page) {
+  const beforeUrl = page.url();
+  const selectors = [
+    'button:has-text("Публикувай")',
+    'input[type="submit"][value="Публикувай"]',
+    'input[type="button"][value="Публикувай"]',
+  ];
+  const clicked = await clickVisibleButton(page, selectors);
+  if (!clicked) return { submitted: false, verified: false, beforeUrl, afterUrl: page.url(), reason: 'Не е намерен точният финален бутон „Публикувай“.' };
+  await page.waitForTimeout(1500);
+  const afterUrl = page.url();
+  const bodyText = (await page.locator('body').innerText().catch(() => '')).replace(/\\s+/g, ' ').trim();
+  const confirmation = /обявата.{0,80}(публикувана|активна|създадена)|успешно.{0,80}(публику|обяв)|публикуването.{0,80}(успешно|завърши)/i.test(bodyText);
+  const links = await page.locator('a[href]').evaluateAll(anchors => anchors.map(anchor => (anchor as HTMLAnchorElement).href).filter(Boolean));
+  const listingUrl = links.find(link => /mobile\\.bg/i.test(link) && /(act=4|adv=|obiava)/i.test(link)) || (/(act=4|adv=|obiava)/i.test(afterUrl) ? afterUrl : null);
+  const verified = Boolean(listingUrl || confirmation);
+  return {
+    submitted: true,
+    verified,
+    beforeUrl,
+    afterUrl,
+    listing_url: listingUrl,
+    confirmation_text_found: confirmation,
+    confirmation_excerpt: confirmation ? bodyText.slice(0, 500) : null,
+    reason: verified ? undefined : 'Кликът е изпълнен, но Mobile.bg не потвърди създадена обява и не върна URL/ID.',
+  };
 }
 
 async function selectText(page: Page, selector: string, wanted: string) {
@@ -237,17 +228,19 @@ async function run() {
     if (loginState === 'credentials_missing') return await finish(job, 'NEEDS_LOGIN', { url: page.url() }, 'Нужен е еднократен защитен вход в Mobile.bg на сървъра.');
     if (loginState === 'form_not_recognized' || loginState === 'login_failed') return await finish(job, 'NEEDS_LOGIN', { url: page.url(), reason: loginState }, 'Mobile.bg не прие автоматичния вход.');
     const result = await populateStepOne(page, fieldResult.data || [], extraResult.data || []);
+    const dataStage = await advanceFromDataStage(page);
+    if (!dataStage.advanced) return await finish(job, 'NEEDS_CONFIGURATION', { ...result, data_stage: dataStage, url: page.url(), login_state: loginState }, dataStage.reason || 'Неуспешно преминаване към етапа със снимки.');
     const imageUpload = await uploadSelectedImages(page, (imageResult.data || []) as DraftImage[]);
-    if (imageUpload.uploaded === 0) return await finish(job, 'NEEDS_CONFIGURATION', { ...result, image_upload: imageUpload, url: page.url(), login_state: loginState }, 'Няма качени избрани снимки. Избери поне една снимка за обявата.');
+    if (imageUpload.uploaded === 0) return await finish(job, 'NEEDS_CONFIGURATION', { ...result, data_stage: dataStage, image_upload: imageUpload, url: page.url(), login_state: loginState }, 'Няма качени избрани снимки. Избери поне една снимка за обявата.');
     const screenshotPath = `/tmp/mobile-bg-${job.id}.png`;
     await page.screenshot({ path: screenshotPath, fullPage: true });
     if (job.mode === 'LIVE') {
-      const submission = await submitLiveListing(page);
+      const submission = await submitAndVerifyOnMobileBg(page);
       await page.screenshot({ path: screenshotPath, fullPage: true });
-      if (!submission.submitted) {
-        return await finish(job, 'NEEDS_CONFIGURATION', { ...result, ...submission, image_upload: imageUpload, url: page.url(), login_state: loginState, screenshot_path: screenshotPath }, 'Mobile.bg не показа финален бутон за публикуване или изисква допълнителни полета/снимки.');
+      if (!submission.submitted || !submission.verified) {
+        return await finish(job, 'NEEDS_CONFIGURATION', { ...result, data_stage: dataStage, ...submission, image_upload: imageUpload, url: page.url(), login_state: loginState, screenshot_path: screenshotPath }, submission.reason || 'Mobile.bg не потвърди публикацията.');
       }
-      return await finish(job, 'COMPLETED', { ...result, ...submission, image_upload: imageUpload, url: page.url(), login_state: loginState, screenshot_path: screenshotPath, message: 'Тестовата обява е изпратена към Mobile.bg.' });
+      return await finish(job, 'COMPLETED', { ...result, data_stage: dataStage, ...submission, image_upload: imageUpload, url: page.url(), login_state: loginState, screenshot_path: screenshotPath, message: 'Mobile.bg потвърди създадена обява.' });
     }
     await finish(job, 'PREVIEW_READY', { ...result, url: page.url(), login_state: loginState, screenshot_path: screenshotPath, message: 'Стъпка 1 е попълнена без изпращане към Mobile.bg.' });
   } catch (cause) {
