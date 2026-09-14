@@ -87,6 +87,7 @@ async function clickVisibleButton(page: Page, selectors: string[]) {
 async function advanceFromDataStage(page: Page) {
   const beforeUrl = page.url();
   const selectors = [
+    'a:has-text("Продължи")',
     'button:has-text("Продължи")',
     'input[type="submit"][value="Продължи"]',
     'input[type="button"][value="Продължи"]',
@@ -108,6 +109,8 @@ async function advanceFromDataStage(page: Page) {
 async function submitAndVerifyOnMobileBg(page: Page) {
   const beforeUrl = page.url();
   const selectors = [
+    'a#pubButton',
+    'a:has-text("Публикувай")',
     'button:has-text("Публикувай")',
     'input[type="submit"][value="Публикувай"]',
     'input[type="button"][value="Публикувай"]',
@@ -157,8 +160,15 @@ async function uploadSelectedImages(page: Page, images: DraftImage[]) {
     if (await inputs.count() === 0) return { uploaded: 0, skipped: [...skipped, 'Mobile.bg не показа поле за снимки.'] };
     if (files.length === 0) return { uploaded: 0, skipped };
     await inputs.first().setInputFiles(files);
-    await page.waitForTimeout(1000);
-    return { uploaded: files.length, skipped };
+    await page.waitForFunction((expected) => {
+      const items = document.querySelectorAll('#container > li.hasPhoto');
+      const processing = document.querySelectorAll('#container > li.hasPhoto .processing');
+      return items.length === expected && processing.length === 0;
+    }, files.length, { timeout: 30000 }).catch(() => undefined);
+    const photoCount = await page.locator('#container > li.hasPhoto').count();
+    const processingCount = await page.locator('#container > li.hasPhoto .processing').count();
+    if (photoCount !== files.length || processingCount !== 0) return { uploaded: photoCount, skipped: [...skipped, 'Mobile.bg не потвърди всички снимки.'] };
+    return { uploaded: photoCount, skipped };
   } finally {
     for (const file of files) if (file.startsWith(workDir)) await rm(file, { force: true }).catch(() => undefined);
     await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
@@ -198,13 +208,20 @@ async function populateStepOne(page: Page, fields: DraftField[], extras: DraftEx
   ].filter(Boolean);
   const wantedExtras = new Set([...extras.filter(e => e.selected).map(e => EXTRA_ALIASES[e.mobile_bg_label] || e.mobile_bg_label), ...derived]);
   for (const label of wantedExtras) {
-    const checkbox = page.locator(`xpath=//input[@type="checkbox" and @value=${JSON.stringify(label)}]`).first();
-    if (await checkbox.count()) { await checkbox.check(); filled.push(`extra:${label}`); }
-    else skipped.push({ key: `extra:${label}`, value: label, reason: 'Няма точно съвпадение.' });
+    const candidates = page.locator('label'); let matched = false;
+    for (let i = 0; i < await candidates.count(); i += 1) {
+      const node = candidates.nth(i); const text = (await node.innerText().catch(() => '')).replace(/\\s+/g, ' ').trim().toLocaleLowerCase('bg');
+      if (text !== label.trim().toLocaleLowerCase('bg')) continue;
+      const input = node.locator('input[type="checkbox"]').first();
+      if (await input.count()) { await input.check(); matched = true; break; }
+      const forId = await node.getAttribute('for');
+      if (forId) { const linked = page.locator(`#${forId}`).first(); if (await linked.count()) { await linked.check(); matched = true; break; } }
+    }
+    if (matched) filled.push(`extra:${label}`); else skipped.push({ key: `extra:${label}`, value: label, reason: 'Няма точно съвпадение по видим label.' });
   }
   const description = values.get('final_description') || values.get('description') || '';
   if (description) {
-    const textarea = page.locator('textarea').first();
+    const textarea = page.locator('textarea[name="f21"]').first();
     if (await textarea.count()) { await textarea.fill(description); filled.push('final_description'); }
     else skipped.push({ key: 'final_description', value: description, reason: 'Полето за описание липсва.' });
   }
