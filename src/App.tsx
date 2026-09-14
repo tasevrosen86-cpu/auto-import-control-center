@@ -13,14 +13,13 @@ import { Statistics } from '@/pages/Statistics';
 import { Sales } from '@/pages/Sales';
 import { supabase } from '@/lib/supabase';
 import type { DraftSeed } from '@/lib/draft_seed';
-import type { SourceIntakeContext } from '@/lib/draft_create';
+import { createDraftFromCatalog } from '@/lib/draft_create';
 
 function App() {
   const [page, setPage] = useState<Page>('vehicles');
   const [mode, setMode] = useState<AppMode>('admin');
   const [selectedVehicle, setSelectedVehicle] = useState<number | null>(null);
   const [draftToOpen, setDraftToOpen] = useState<string | null>(null);
-  const [intakeToPrefill, setIntakeToPrefill] = useState<SourceIntakeContext & { sourceUrl: string } | null>(null);
   const [conflictCount, setConflictCount] = useState(0);
 
   useEffect(() => {
@@ -33,21 +32,15 @@ function App() {
 
   function handleNavigate(nextPage: Page) { setPage(nextPage); setSelectedVehicle(null); if (nextPage !== 'imports') setDraftToOpen(null); }
   function handleSelectVehicle(id: number) { setSelectedVehicle(id); }
-  function handleCreateDraft(seed: DraftSeed) {
-    if (!seed.sourceUrl) {
-      window.alert('За този автомобил няма линк към корейска или канадска обява.');
-      return;
+  async function handleCreateDraft(seed: DraftSeed) {
+    try {
+      const draftId = await createDraftFromCatalog(seed);
+      setDraftToOpen(draftId);
+      setSelectedVehicle(null);
+      setPage('imports');
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Черновата от Каталога не беше създадена.');
     }
-    setIntakeToPrefill({
-      sourceUrl: seed.sourceUrl,
-      origin: 'ADMIN_CATALOG',
-      title: seed.title,
-      catalogPermanentId: seed.catalogPermanentId,
-      fields: seed.fields,
-      fieldSources: seed.fieldSources,
-    });
-    setSelectedVehicle(null);
-    setPage('imports');
   }
   function handleModeChange(nextMode: AppMode) { setMode(nextMode); setSelectedVehicle(null); setPage(nextMode === 'broker' ? 'broker' : 'dashboard'); }
 
@@ -55,7 +48,7 @@ function App() {
   if (page === 'vehicles' && selectedVehicle !== null) content = <VehicleDetail vehicleId={selectedVehicle} onBack={() => setSelectedVehicle(null)} onCreateDraft={handleCreateDraft} />;
   else if (page === 'vehicles') content = <VehicleList onSelectVehicle={handleSelectVehicle} onCreateDraft={handleCreateDraft} />;
   else if (page === 'dashboard') content = <Dashboard />;
-  else if (page === 'imports') content = <Imports openDraftId={draftToOpen} onDraftOpened={() => setDraftToOpen(null)} intakePrefill={intakeToPrefill} onIntakePrefillLoaded={() => setIntakeToPrefill(null)} />;
+  else if (page === 'imports') content = <Imports openDraftId={draftToOpen} onDraftOpened={() => setDraftToOpen(null)} />;
   else if (page === 'jobs') content = <Jobs />;
   else if (page === 'conflicts') content = <Conflicts />;
   else if (page === 'broker') content = <BrokerSearch />;
