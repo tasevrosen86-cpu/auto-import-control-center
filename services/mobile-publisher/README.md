@@ -10,7 +10,8 @@ handles that job and exits.  It does **not** keep a browser running.
 2. Set server-only secrets: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `MOBILE_BG_USER_DATA_DIR`, `MOBILE_BG_USERNAME`, `MOBILE_BG_PASSWORD` and `MOBILE_BG_HEADLESS=false`.
 3. Run `npm install && npx playwright install chromium`.
 4. Run the worker once. It logs in automatically from the server secrets and saves the browser session in `MOBILE_BG_USER_DATA_DIR`.
-5. Make one preview listing to record the real selectors. If Mobile.bg uses different login controls, add `MOBILE_BG_LOGIN_USERNAME_SELECTOR`, `MOBILE_BG_LOGIN_PASSWORD_SELECTOR` and `MOBILE_BG_LOGIN_SUBMIT_SELECTOR` as server secrets. Do not enable `LIVE` before that test succeeds.
+5. Queue one `PREVIEW` job. The verified Mobile.bg step-one selectors are filled, a screenshot is saved, and the form stops before “ПРОДЪЛЖИ”. If Mobile.bg uses different login controls, add `MOBILE_BG_LOGIN_USERNAME_SELECTOR`, `MOBILE_BG_LOGIN_PASSWORD_SELECTOR` and `MOBILE_BG_LOGIN_SUBMIT_SELECTOR` as server secrets.
+6. Do not enable `LIVE` until steps 2 and 3 (photos and listing package/payment) have been verified with a controlled test listing.
 
 There is intentionally no Mobile.bg password or cookie in this repository,
 Supabase, or the browser-visible web application. The password exists only in
