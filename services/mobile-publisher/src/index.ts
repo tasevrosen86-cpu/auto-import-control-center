@@ -226,9 +226,9 @@ async function run() {
     db.from('mobile_bg_draft_extras').select('mobile_bg_label,selected').eq('draft_id', job.draft_id).eq('selected', true),
     db.from('mobile_bg_draft_images').select('source_url,local_path,is_selected,is_main,display_order').eq('draft_id', job.draft_id).eq('is_selected', true).order('display_order', { ascending: true }),
   ]);
-  if (fieldResult.error) throw fieldResult.error;
-  if (extraResult.error) throw extraResult.error;
-  if (imageResult.error) throw imageResult.error;
+  if (fieldResult.error) return await finish(job, 'FAILED', {}, `Грешка при четене на полетата: ${fieldResult.error.message}`);
+  if (extraResult.error) return await finish(job, 'FAILED', {}, `Грешка при четене на екстрите: ${extraResult.error.message}`);
+  if (imageResult.error) return await finish(job, 'FAILED', {}, `Грешка при четене на снимките: ${imageResult.error.message}. Провери достъпа SELECT до mobile_bg_draft_images.`);
   const context = await chromium.launchPersistentContext(profileDir, { headless: process.env.MOBILE_BG_HEADLESS === 'true' });
   try {
     const page = context.pages()[0] || await context.newPage();
