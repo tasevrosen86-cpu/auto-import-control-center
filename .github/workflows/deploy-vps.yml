@@ -37,6 +37,14 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
 
+      - name: Inspect publisher prerequisites
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || 22 }}
+        run: |
+          ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" 'set +e; echo "NODE=$(node --version 2>/dev/null || echo missing)"; echo "NPM=$(npm --version 2>/dev/null || echo missing)"; for file in /etc/aicc-mobile-publisher.env /etc/auto-import-control-center/mobile-publisher.env /home/ubuntu/auto-import-control-center/services/mobile-publisher/package.json /home/ubuntu/.local/share/aicc-mobile-bg; do if [ -e "$file" ]; then echo "FOUND:$file"; else echo "MISSING:$file"; fi; done; for unit in aicc-mobile-publisher.service aicc-mobile-publisher.timer mobile-publisher.service mobile-publisher.timer; do printf "%s=" "$unit"; systemctl is-active "$unit" 2>/dev/null || true; done'
+
       - name: Upload and activate build
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
