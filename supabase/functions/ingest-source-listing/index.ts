@@ -129,9 +129,12 @@ Deno.serve(async (request) => {
   if (request.method !== 'POST') return response({ error: 'Използвай POST.' }, 405);
 
   const expectedToken = Deno.env.get('SOURCE_INTAKE_TOKEN');
+  const serviceRole = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
   const receivedToken = request.headers.get('x-source-intake-token');
-  if (!expectedToken) return response({ error: 'SOURCE_INTAKE_TOKEN не е настроен.' }, 500);
-  if (!receivedToken || receivedToken !== expectedToken) return response({ error: 'Невалиден intake token.' }, 401);
+  const authorization = request.headers.get('authorization') || '';
+  const serviceRoleRequest = Boolean(serviceRole) && authorization === `Bearer ${serviceRole}`;
+  const tokenRequest = Boolean(expectedToken) && receivedToken === expectedToken;
+  if (!tokenRequest && !serviceRoleRequest) return response({ error: 'Невалиден intake token.' }, 401);
 
   let payload: JsonRecord;
   try {
@@ -237,11 +240,12 @@ Deno.serve(async (request) => {
     }
   }
 
-  const { error: jobError } = await db.from('source_listing_jobs').upsert({
-    draft_id: draftId, source_type: sourceType, source_url: sourceUrl || '', status: 'COMPLETED',
+  const { error: jobError } = await db.from('source_listing_jobs').update({
+    source_type: sourceType, source_url: sourceUrl || '', status: 'COMPLETED',
     raw_payload: payload, normalized_payload: normalisedPayload, payload_received_at: new Date().toISOString(),
     result: normalisedPayload, finished_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-  }, { onConflict: 'draft_id' });
+    error_message: null,
+  }).eq('draft_id', draftId);
   if (jobError) return response({ error: jobError.message }, 500);
 
   await db.from('mobile_bg_draft_action_log').insert({
