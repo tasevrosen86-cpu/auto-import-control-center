@@ -131,14 +131,39 @@ function normalizeCondition(value: string | null): string | null {
   if (!value) return 'Използван';
   return value.toLowerCase().includes('new') ? 'Нов' : 'Използван';
 }
-function imagesFrom(root: JsonRecord): JsonRecord[] {
-  const raw = root.image || root.images || root.photo || root.photos;
-  const values = Array.isArray(raw) ? raw : raw ? [raw] : [];
-  return values.map((item, index) => {
-    const record = asRecord(item);
-    const url = scalar(item) || scalar(record.url) || scalar(record.contentUrl);
-    return url ? { source_url: url, is_main: index === 0, display_order: index + 1 } : {};
-  }).filter(item => Object.keys(item).length > 0);
+function imagesFrom(root: unknown): JsonRecord[] {
+  const urls = new Set<string>();
+  const imageKeys = new Set(['image', 'images', 'photo', 'photos', 'imageurl', 'imageurls', 'photourl', 'photourls', 'contenturl', 'largeimage', 'originalimage']);
+
+  const addUrl = (value: unknown) => {
+    const text = scalar(value);
+    if (!text || !/^https?:\/\//i.test(text)) return;
+    if (!/\.(?:jpe?g|png|webp)(?:[?#]|$)/i.test(text) && !/(?:image|photo|cdn|carimg|encar)/i.test(text)) return;
+    if (/(?:logo|icon|sprite|avatar|banner|placeholder|tracking|pixel)/i.test(text)) return;
+    urls.add(text.replace(/&amp;/g, '&'));
+  };
+
+  walk(root, record => {
+    for (const [key, value] of Object.entries(record)) {
+      if (!imageKeys.has(key.toLowerCase())) continue;
+      const values = Array.isArray(value) ? value : [value];
+      for (const item of values) {
+        const image = asRecord(item);
+        addUrl(item);
+        addUrl(image.url);
+        addUrl(image.contentUrl);
+        addUrl(image.source_url);
+        addUrl(image.large);
+        addUrl(image.original);
+      }
+    }
+  });
+
+  return [...urls].slice(0, 40).map((source_url, index) => ({
+    source_url,
+    is_main: index === 0,
+    display_order: index + 1,
+  }));
 }
 function extrasFrom(root: JsonRecord): string[] {
   const known = ['feature', 'features', 'additionalProperty', 'vehicleEquipment', 'equipment'];
@@ -213,7 +238,7 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string)
     },
     fields,
     extras: extrasFrom(vehicle),
-    images: imagesFrom(vehicle),
+    images: imagesFrom(documents),
     raw_json: documents,
   };
 }
