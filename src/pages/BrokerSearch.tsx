@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Search, Car, ExternalLink, TrendingDown, CheckCircle } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { Badge } from '@/components/Badge';
+import { createDraftFromSourceUrl } from '@/lib/draft_create';
 import { formatEUR, getBestPrice } from '@/lib/format';
 import type { VehicleWithMarketplace } from '@/types';
 
@@ -17,6 +18,10 @@ export function BrokerSearch() {
   const [searched, setSearched] = useState(false);
   const [loading, setLoading] = useState(false);
   const [savedSearchId, setSavedSearchId] = useState<number | null>(null);
+  const [sourceUrl, setSourceUrl] = useState('');
+  const [creatingDraft, setCreatingDraft] = useState(false);
+  const [draftNotice, setDraftNotice] = useState<string | null>(null);
+  const [draftError, setDraftError] = useState<string | null>(null);
 
   async function handleSearch() {
     setLoading(true);
@@ -67,12 +72,59 @@ export function BrokerSearch() {
     }
   }
 
+  async function handleSourceLink() {
+    const url = sourceUrl.trim();
+    setDraftError(null);
+    setDraftNotice(null);
+    if (!url) {
+      setDraftError('Постави линк към обявата.');
+      return;
+    }
+    setCreatingDraft(true);
+    try {
+      const draft = await createDraftFromSourceUrl(url, 'BROKER_LINK');
+      setSourceUrl('');
+      setDraftNotice(draft.wasCreated
+        ? 'Линкът е приет. Черновата ще се попълни от JSON на обявата и ще се появи в „Обяви“.'
+        : 'За този линк вече има активна чернова в „Обяви“.');
+    } catch (error) {
+      setDraftError(error instanceof Error ? error.message : 'Черновата не можа да бъде създадена.');
+    } finally {
+      setCreatingDraft(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-xl font-bold text-slate-900">Клиентско търсене</h2>
         <p className="text-sm text-slate-500 mt-0.5">Търсене в MASTER каталога за клиентска оферта</p>
       </div>
+
+      <section className="rounded-xl border border-blue-200 bg-blue-50 p-4">
+        <h3 className="text-sm font-bold text-slate-800">Нова чернова от линк</h3>
+        <p className="mt-1 text-xs text-slate-600">Брокерът няма Каталог: поставя URL към Encar или AutoTrader. Системата извлича JSON от обявата и създава чернова в „Обяви“.</p>
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+          <input
+            type="url"
+            value={sourceUrl}
+            onChange={event => setSourceUrl(event.target.value)}
+            onKeyDown={event => { if (event.key === 'Enter') handleSourceLink(); }}
+            placeholder="Постави линк към автомобилна обява..."
+            className="h-10 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none focus:border-blue-400"
+          />
+          <button
+            type="button"
+            onClick={handleSourceLink}
+            disabled={creatingDraft}
+            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
+          >
+            {creatingDraft ? 'Обработване…' : 'Създай чернова'}
+          </button>
+        </div>
+        {draftError && <p className="mt-2 text-xs text-rose-700">{draftError}</p>}
+        {draftNotice && <p className="mt-2 text-xs text-emerald-700">{draftNotice}</p>}
+      </section>
 
       {/* Search form */}
       <div className="bg-white rounded-xl border border-slate-200 p-5">
