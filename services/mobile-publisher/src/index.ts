@@ -133,6 +133,38 @@ async function submitAndVerifyOnMobileBg(page: Page) {
   };
 }
 
+async function uploadSelectedImages(page: Page, images: DraftImage[]) {
+  const selected = images.filter(image => image.is_selected).sort((a, b) => a.display_order - b.display_order);
+  if (selected.length === 0) return { uploaded: 0, skipped: ['Няма избрани снимки.'] };
+  const workDir = join(tmpdir(), 'aicc-mobile-bg-images');
+  await mkdir(workDir, { recursive: true });
+  const files: string[] = [];
+  const skipped: string[] = [];
+  try {
+    for (let index = 0; index < selected.length; index += 1) {
+      const image = selected[index];
+      const localFile = image.local_path && image.local_path.startsWith('/') ? image.local_path : null;
+      const filePath = localFile || join(workDir, `image-${index + 1}.jpg`);
+      if (!localFile) {
+        if (!image.source_url) { skipped.push(`Снимка #${index + 1}: липсва URL.`); continue; }
+        const response = await fetch(image.source_url);
+        if (!response.ok) { skipped.push(`Снимка #${index + 1}: HTTP ${response.status}.`); continue; }
+        await writeFile(filePath, Buffer.from(await response.arrayBuffer()));
+      }
+      files.push(filePath);
+    }
+    const inputs = page.locator('input[type="file"]');
+    if (await inputs.count() === 0) return { uploaded: 0, skipped: [...skipped, 'Mobile.bg не показа поле за снимки.'] };
+    if (files.length === 0) return { uploaded: 0, skipped };
+    await inputs.first().setInputFiles(files);
+    await page.waitForTimeout(1000);
+    return { uploaded: files.length, skipped };
+  } finally {
+    for (const file of files) if (file.startsWith(workDir)) await rm(file, { force: true }).catch(() => undefined);
+    await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
 async function selectText(page: Page, selector: string, wanted: string) {
   const select = page.locator(selector).first();
   const normalized = wanted.trim().toLocaleLowerCase('bg');
