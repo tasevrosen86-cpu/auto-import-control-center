@@ -185,7 +185,11 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string)
   const brand = nested(vehicle, 'brand', ['name']) || firstValue(vehicle, ['make', 'manufacturer']);
   const model = firstValue(vehicle, ['model', 'modelName']);
   const year = firstValue(vehicle, ['vehicleModelDate', 'modelYear', 'year']);
-  const mileage = numberText(nested(vehicle, 'mileageFromOdometer', ['value']) || firstValue(vehicle, ['mileage', 'odometer']));
+  const mileage = numberText(
+    nested(vehicle, 'mileageFromOdometer', ['value']) ||
+    firstValue(vehicle, ['mileage', 'odometer']) ||
+    pageTitle.match(/([\\d, .]+)\\s*km\\b/i)?.[1] || null,
+  );
   const fuel = normalizeFuel(firstValue(vehicle, ['fuelType', 'fuel']));
   const gearbox = normalizeGearbox(firstValue(vehicle, ['vehicleTransmission', 'transmission', 'gearbox']));
   const power = numberText(nested(vehicle, 'vehicleEngine', ['enginePower', 'power']) || firstValue(vehicle, ['horsepower', 'powerHp', 'enginePower']));
