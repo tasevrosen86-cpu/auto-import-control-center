@@ -840,6 +840,9 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
   const [publishJob, setPublishJob] = useState<MobileBgPublishJob | null>(null);
   const [queuingPublish, setQueuingPublish] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [editValues, setEditValues] = useState<Record<string, string>>({});
+  const [savingFields, setSavingFields] = useState(false);
+  const [saveFieldsError, setSaveFieldsError] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -853,7 +856,9 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
         supabase.from('mobile_bg_publish_jobs').select('*').eq('draft_id', draftId).maybeSingle(),
       ]);
       setDraft((dRes.data || null) as MobileBgDraft | null);
-      setFields((fRes.data || []) as MobileBgDraftField[]);
+      const loadedFields = (fRes.data || []) as MobileBgDraftField[];
+      setFields(loadedFields);
+      setEditValues(Object.fromEntries(loadedFields.map(field => [field.field_key, field.value || ''])));
       setExtras((eRes.data || []) as MobileBgDraftExtra[]);
       setImages((iRes.data || []) as MobileBgDraftImage[]);
       setLogs((lRes.data || []) as MobileBgDraftActionLog[]);
@@ -863,6 +868,43 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
     }
     load();
   }, [draftId]);
+
+  async function saveEditedFields() {
+    setSavingFields(true);
+    setSaveFieldsError(null);
+    try {
+      const rows = mobileBgVisibleFieldsBySection('basic')
+        .concat(mobileBgVisibleFieldsBySection('price'))
+        .concat(mobileBgVisibleFieldsBySection('description'))
+        .concat(mobileBgVisibleFieldsBySection('publishing'))
+        .filter((def, index, all) => all.findIndex(item => item.key === def.key) === index)
+        .map(def => ({
+          draft_id: draftId,
+          field_key: def.key,
+          mobile_bg_label: def.mobile_bg_label,
+          our_db_key: def.our_db_key,
+          value: (editValues[def.key] || '').trim() || null,
+          field_type: def.field_type,
+          source: 'manual',
+          proof: null,
+          validation_status: (editValues[def.key] || '').trim() ? 'valid' : 'missing',
+          filled_at: (editValues[def.key] || '').trim() ? new Date().toISOString() : null,
+          is_manual_edit: true,
+        }));
+      const { error } = await supabase.from('mobile_bg_draft_fields').upsert(rows, { onConflict: 'draft_id,field_key' });
+      if (error) throw error;
+      await supabase.from('mobile_bg_draft_action_log').insert({
+        draft_id: draftId, action: 'DRAFT_FIELDS_MANUALLY_UPDATED', actor: 'Росен',
+        details: { fields: rows.filter(row => row.value !== null).map(row => row.field_key) },
+      });
+      setFields(rows as MobileBgDraftField[]);
+      setDraft(current => current ? { ...current, updated_at: new Date().toISOString() } : current);
+    } catch (error) {
+      setSaveFieldsError(error instanceof Error ? error.message : 'Промените не бяха записани.');
+    } finally {
+      setSavingFields(false);
+    }
+  }
 
   async function queuePublish() {
     const readiness = getPublishReadiness(fields);
@@ -935,6 +977,12 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
         </div>
       </div>
 
+      <div className="flex items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+        <span className="text-xs text-amber-800">Полената могат да се редактират ръчно.</span>
+        <button onClick={saveEditedFields} disabled={savingFields} className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-60">{savingFields ? 'Записване…' : 'Запази промените'}</button>
+      </div>
+      {saveFieldsError && <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">{saveFieldsError}</div>}
+
       <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
         Този бутон само предава черновата към браузъра на Mobile.bg и попълва формата. Финалното публикуване остава ръчно и не се натиска от системата.
         {publishJob && <span className="ml-1 font-bold">Последна заявка: {publishJob.status}{publishJob.last_error ? ` — ${publishJob.last_error}` : ''}</span>}
@@ -955,9 +1003,11 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
                   return (
                     <div key={def.key} className={`rounded border p-2 ${saved?.value ? 'border-slate-200' : def.required ? 'border-amber-200 bg-amber-50/40' : 'border-slate-200'}`}>
                       <p className="text-[10px] font-bold text-slate-700">{def.key === 'final_description' ? 'Допълнителна информация' : def.mobile_bg_label}{def.required ? ' *' : ''}</p>
-                      <p className={`mt-0.5 text-[11px] ${saved?.value ? 'text-slate-800' : 'italic text-slate-400'}`}>
-                        {saved?.value || 'Очаква попълване'}
-                      </p>
+                      {def.field_type === 'textarea' || def.key === 'description' || def.key === 'final_description' ? (
+                        <textarea value={editValues[def.key] ?? saved?.value ?? ''} onChange={e => setEditValues(prev => ({ ...prev, [def.key]: e.target.value }))} rows={def.key === 'final_description' ? 7 : 3} className="mt-1 w-full rounded border border-slate-300 bg-white p-1.5 text-[11px] text-slate-800 outline-none focus:border-blue-500" placeholder="Въведи стойност..." />
+                      ) : (
+                        <input value={editValues[def.key] ?? saved?.value ?? ''} onChange={e => setEditValues(prev => ({ ...prev, [def.key]: e.target.value }))} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-[11px] text-slate-800 outline-none focus:border-blue-500" placeholder="Въведи стойност..." />
+                      )}
                       <div className="mt-1 flex flex-wrap items-center gap-2 text-[9px] text-slate-400">
                         <span>Източник: {saved ? (SOURCE_LABELS_BG[saved.source] || saved.source) : (SOURCE_LABELS_BG[def.source] || def.source)}</span>
                         {saved?.is_manual_edit && <span className="text-amber-600"><Edit3 className="inline h-2.5 w-2.5" /> ръчно</span>}
