@@ -87,6 +87,11 @@ jobs:
           rm -f /tmp/dist.tar.gz /tmp/worker.tar.gz /tmp/mobile-publisher.tar.gz /tmp/mobile-publisher.env
 
           NPM_BIN="$(command -v npm)"
+          SOURCE_ENV_FILE="$(systemctl show source-intake-worker.service --property=EnvironmentFiles --value 2>/dev/null | tr ' ' '\n' | sed 's/^-//' | awk 'NF {print; exit}')"
+          SOURCE_ENV_LINE=""
+          if [ -n "$SOURCE_ENV_FILE" ] && [ -f "$SOURCE_ENV_FILE" ]; then
+            SOURCE_ENV_LINE="EnvironmentFile=$SOURCE_ENV_FILE"
+          fi
           sudo tee /etc/systemd/system/aicc-mobile-publisher.service >/dev/null <<UNIT
           [Unit]
           Description=Auto Import Control Center Mobile.bg preview publisher
@@ -97,6 +102,7 @@ jobs:
           Type=oneshot
           User=ubuntu
           WorkingDirectory=$PUBLISHER_DIR
+          $SOURCE_ENV_LINE
           EnvironmentFile=/etc/aicc-mobile-publisher.env
           ExecStart=$NPM_BIN run run-once
           UNIT
