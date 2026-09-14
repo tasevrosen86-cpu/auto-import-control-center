@@ -1,0 +1,47 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Configure SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.VPS_SSH_KEY }}
+
+      - name: Trust VPS host
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Upload and activate build
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || 22 }}
+        run: |
+          tar -C dist -czf dist.tar.gz .
+          scp -P "$VPS_PORT" dist.tar.gz "$VPS_USER@$VPS_HOST:/tmp/auto-import-control-center-dist.tar.gz"
+          ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" 'rm -rf /tmp/auto-import-control-center-dist && mkdir -p /tmp/auto-import-control-center-dist && tar -xzf /tmp/auto-import-control-center-dist.tar.gz -C /tmp/auto-import-control-center-dist && sudo cp -a /tmp/auto-import-control-center-dist/. /var/www/html/ && sudo systemctl reload nginx'
