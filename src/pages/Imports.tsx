@@ -1001,12 +1001,12 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
       window.alert(`Не могат да се изпратят данните без: ${readiness.missing.join(', ')}`);
       return;
     }
-    if (!window.confirm('Подготвям формата в Mobile.bg за ръчна проверка. Няма да има финално изпращане или публикуване. Продължаваме?')) return;
+    if (!window.confirm('Ще изпратя тази тестова обява към Mobile.bg. Възможно е да бъде публикувана реално. Продължаваме?')) return;
     setQueuingPublish(true);
     try {
       const now = new Date().toISOString();
       const { data, error } = await supabase.from('mobile_bg_publish_jobs').upsert({
-        draft_id: draftId, status: 'QUEUED', transport: 'BROWSER_ON_DEMAND', mode: 'PREVIEW',
+        draft_id: draftId, status: 'QUEUED', transport: 'BROWSER_ON_DEMAND', mode: 'LIVE',
         requested_by: 'Росен', requested_at: now, updated_at: now, last_error: null,
       }, { onConflict: 'draft_id' }).select().single();
       if (error) throw error;
@@ -1073,7 +1073,7 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
       {saveFieldsError && <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">{saveFieldsError}</div>}
 
       <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
-        Този бутон само предава черновата към браузъра на Mobile.bg и попълва формата. Финалното публикуване остава ръчно и не се натиска от системата.
+        Този бутон предава черновата към браузъра на Mobile.bg и прави тестово реално изпращане. Провери данните преди натискане.
         {publishJob && <span className="ml-1 font-bold">Последна заявка: {publishJob.status}{publishJob.last_error ? ` — ${publishJob.last_error}` : ''}</span>}
       </div>
 
