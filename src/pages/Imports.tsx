@@ -997,8 +997,11 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
 
   async function queuePublish() {
     const readiness = getPublishReadiness(fields);
-    if (!readiness.ready) {
-      window.alert(`Не могат да се изпратят данните без: ${readiness.missing.join(', ')}`);
+    const selectedImages = images.filter(image => image.is_selected);
+    const missing = [...readiness.missing];
+    if (selectedImages.length === 0) missing.push('поне една избрана снимка');
+    if (missing.length > 0) {
+      window.alert(`Не могат да се изпратят данните без: ${missing.join(', ')}`);
       return;
     }
     if (!window.confirm('Ще изпратя тази тестова обява към Mobile.bg. Възможно е да бъде публикувана реално. Продължаваме?')) return;
@@ -1013,7 +1016,7 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
       await supabase.from('mobile_bg_drafts').update({ status: 'PUBLISH_QUEUED', publish_error: null, updated_at: now }).eq('id', draftId);
       await supabase.from('mobile_bg_draft_action_log').insert({
         draft_id: draftId, action: 'MOBILE_PUBLISH_QUEUED', actor: 'Росен',
-        details: { transport: 'BROWSER_ON_DEMAND', mode: 'PREVIEW' },
+        details: { transport: 'BROWSER_ON_DEMAND', mode: 'LIVE', selected_images: selectedImages.length },
       });
       setPublishJob(data as MobileBgPublishJob);
       setDraft(current => current ? { ...current, status: 'PUBLISH_QUEUED', publish_error: null } : current);
