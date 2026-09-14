@@ -1,0 +1,14 @@
+{
+  "name": "aicc-source-intake-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "run-once": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.57.4",
+    "playwright": "^1.57.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}
