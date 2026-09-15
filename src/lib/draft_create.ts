@@ -99,10 +99,10 @@ export async function createDraftFromCatalog(seed: DraftSeed): Promise<string> {
  * Manual path shared by Обяви and Broker Access. It only queues a source URL;
  * the source-intake worker fetches the listing and sends its JSON to ingestion.
  */
-export async function createDraftFromSourceUrl(sourceUrl: string, origin: IntakeOrigin): Promise<CreatedSourceDraft> {
+export async function createDraftFromSourceUrl(sourceUrl: string, origin: IntakeOrigin, catalog?: { permanentId: number; title: string }): Promise<CreatedSourceDraft> {
   const intake = analyzeSourceUrl(sourceUrl);
   const { data, error: queueError } = await supabase.functions.invoke('queue-source-intake', {
-    body: { source_url: intake.sourceUrl, intake_origin: origin },
+    body: { source_url: intake.sourceUrl, intake_origin: origin, catalog_permanent_id: catalog?.permanentId, title: catalog?.title },
   });
   if (queueError) throw queueError;
 
