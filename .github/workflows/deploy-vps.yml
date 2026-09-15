@@ -144,3 +144,5 @@ jobs:
           REMOTE_SCRIPT
 
           rm -f mobile-publisher.env dist.tar.gz worker.tar.gz mobile-publisher.tar.gz
+
+# Automatic deployment enabled
