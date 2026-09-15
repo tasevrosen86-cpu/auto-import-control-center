@@ -64,6 +64,23 @@ export async function createDraftFromCatalog(seed: DraftSeed): Promise<string> {
     if (error) throw new Error(error.message);
   }
 
+  if (seed.images?.length) {
+    const imageRows = seed.images.map(image => ({
+      draft_id: draft.id,
+      source_url: image.source_url,
+      local_path: null,
+      converted_jpg: false,
+      is_selected: true,
+      is_main: image.is_main,
+      display_order: image.display_order,
+      real_car_photo_check: false,
+      processing_status: 'pending',
+      size_bytes: null,
+    }));
+    const { error } = await supabase.from('mobile_bg_draft_images').insert(imageRows);
+    if (error) throw new Error(error.message);
+  }
+
   const { error: logError } = await supabase.from('mobile_bg_draft_action_log').insert({
     draft_id: draft.id,
     action: 'CATALOG_JSON_DRAFT_CREATED',
