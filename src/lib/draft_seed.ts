@@ -7,6 +7,7 @@ export interface DraftSeed {
   sourceUrl: string | null;
   fields: Record<string, string>;
   fieldSources: Record<string, string>;
+  images: Array<{ source_url: string; is_main: boolean; display_order: number }>;
 }
 
 function asText(value: unknown): string {
@@ -40,6 +41,32 @@ function firstRaw(raw: Record<string, unknown>, keys: string[]): string {
 function normaliseEuro(value: string): string {
   const match = value.match(/(?:euro|евро)\\s*([1-6][a-z]?)/i);
   return match ? `Euro ${match[1].toLowerCase()}` : value;
+}
+
+function imageSeed(raw: Record<string, unknown>) {
+  const urls = new Set<string>();
+  const keys = new Set(['image','images','photo','photos','imageUrl','imageUrls','photoUrl','photoUrls','contentUrl','original','large']);
+  const seen = new Set<unknown>();
+  const walk = (value: unknown) => {
+    if (!value || typeof value !== 'object' || seen.has(value)) return;
+    seen.add(value);
+    if (Array.isArray(value)) { value.forEach(walk); return; }
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      if (keys.has(key) || keys.has(key.toLowerCase())) {
+        const values = Array.isArray(item) ? item : [item];
+        for (const candidate of values) {
+          const text = asText(candidate).trim();
+          const record = candidate && typeof candidate === 'object' ? candidate as Record<string, unknown> : {};
+          for (const url of [text, asText(record.url), asText(record.contentUrl), asText(record.original), asText(record.large)]) {
+            if (/^https?:\/\//i.test(url) && (/\.(?:jpe?g|png|webp)(?:[?#]|$)/i.test(url) || /(?:image|photo|carimg|encar|autotrader|cdn)/i.test(url))) urls.add(url);
+          }
+        }
+      }
+      walk(item);
+    }
+  };
+  walk(raw);
+  return [...urls].slice(0, 40).map((source_url, index) => ({ source_url, is_main: index === 0, display_order: index + 1 }));
 }
 
 function detailFallback(raw: Record<string, unknown>) {
@@ -116,5 +143,6 @@ export function createDraftSeed(vehicle: Vehicle, marketplaces: VehicleMarketpla
     sourceUrl,
     fields,
     fieldSources,
+    images: imageSeed(raw),
   };
 }
