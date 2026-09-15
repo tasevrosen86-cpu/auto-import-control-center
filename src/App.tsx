@@ -13,7 +13,7 @@ import { Statistics } from '@/pages/Statistics';
 import { Sales } from '@/pages/Sales';
 import { supabase } from '@/lib/supabase';
 import type { DraftSeed } from '@/lib/draft_seed';
-import { createDraftFromCatalog } from '@/lib/draft_create';
+import { createDraftFromSourceUrl } from '@/lib/draft_create';
 
 function App() {
   const [page, setPage] = useState<Page>('vehicles');
@@ -34,12 +34,16 @@ function App() {
   function handleSelectVehicle(id: number) { setSelectedVehicle(id); }
   async function handleCreateDraft(seed: DraftSeed) {
     try {
-      const draftId = await createDraftFromCatalog(seed);
-      setDraftToOpen(draftId);
+      if (!seed.sourceUrl) throw new Error('За тази каталожна позиция няма source URL.');
+      const queued = await createDraftFromSourceUrl(seed.sourceUrl, 'ADMIN_CATALOG', {
+        permanentId: seed.catalogPermanentId,
+        title: seed.title,
+      });
+      setDraftToOpen(queued.id);
       setSelectedVehicle(null);
       setPage('imports');
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : 'Черновата от Каталога не беше създадена.');
+      window.alert(error instanceof Error ? error.message : 'Черновата не беше създадена.');
     }
   }
   function handleModeChange(nextMode: AppMode) { setMode(nextMode); setSelectedVehicle(null); setPage(nextMode === 'broker' ? 'broker' : 'dashboard'); }
