@@ -111,6 +111,35 @@ function numberText(value: string | null): string | null {
   const digits = value.replace(/[^0-9.]/g, '');
   return digits || value;
 }
+function detailValue(text: string, patterns: RegExp[]): string | null {
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[1]) return match[1].trim();
+  }
+  return null;
+}
+function valuesFromDetailText(text: string) {
+  return {
+    mileage: detailValue(text, [
+      /(?:mileage|odometer|kilomet(?:er|re)s?|пробег)\\s*[:\\-]?\\s*([0-9][0-9, .]*)\\s*(?:km|км)?/i,
+    ]),
+    gearbox: detailValue(text, [
+      /(?:transmission|gearbox|скоростна\\s+кутия)\\s*[:\\-]?\\s*([^\\n|,;]+)/i,
+    ]),
+    power: detailValue(text, [
+      /(?:horsepower|horse\\s*power|power|мощност)\\s*[:\\-]?\\s*([0-9][0-9 .]*)\\s*(?:hp|kw|к\\.?с\\.?)?/i,
+    ]),
+    displacement: detailValue(text, [
+      /(?:engine\\s*(?:size|displacement)|displacement|кубатура|работен\\s+обем)\\s*[:\\-]?\\s*([0-9][0-9 .]*)\\s*(?:cc|cm3|l|литра)?/i,
+    ]),
+    euro: detailValue(text, [
+      /(?:euro\\s*(?:standard|class)?|екокатегория|евро\\s*стандарт)\\s*[:\\-]?\\s*(euro\\s*[1-6][a-z]?|евро\\s*[1-6][a-z]?)/i,
+    ]),
+    color: detailValue(text, [
+      /(?:exterior\\s+color|vehicle\\s+color|color|цвят)\\s*[:\\-]?\\s*([^\\n|,;]+)/i,
+    ]),
+  };
+}
 function normalizeFuel(value: string | null): string | null {
   if (!value) return null;
   const source = value.toLowerCase();
@@ -195,27 +224,28 @@ function extrasFrom(root: JsonRecord): string[] {
   }
   return [...result];
 }
-function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string) {
+function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string, detail: ReturnType<typeof valuesFromDetailText> = valuesFromDetailText('')) {
   const vehicle = vehicleRecord(documents);
   const source = job.source_type;
   const brand = nested(vehicle, 'brand', ['name']) || firstValue(vehicle, ['make', 'manufacturer']);
   const model = firstValue(vehicle, ['model', 'modelName']);
   const year = firstValue(vehicle, ['vehicleModelDate', 'modelYear', 'year']);
   const mileage = numberText(
+    detail.mileage ||
     nested(vehicle, 'mileageFromOdometer', ['value']) ||
     firstValue(vehicle, ['mileage', 'odometer']) ||
     pageTitle.match(/([\\d, .]+)\\s*km\\b/i)?.[1] || null,
   );
   const fuel = normalizeFuel(firstValue(vehicle, ['fuelType', 'fuel']));
-  const gearbox = normalizeGearbox(firstValue(vehicle, ['vehicleTransmission', 'transmission', 'gearbox']));
-  const power = numberText(nested(vehicle, 'vehicleEngine', ['enginePower', 'power']) || firstValue(vehicle, ['horsepower', 'powerHp', 'enginePower']));
-  const displacement = numberText(nested(vehicle, 'vehicleEngine', ['engineDisplacement', 'displacement']) || firstValue(vehicle, ['engineDisplacement', 'displacement']));
+  const gearbox = normalizeGearbox(detail.gearbox || firstValue(vehicle, ['vehicleTransmission', 'transmission', 'gearbox']));
+  const power = numberText(detail.power || nested(vehicle, 'vehicleEngine', ['enginePower', 'power']) || firstValue(vehicle, ['horsepower', 'powerHp', 'enginePower']));
+  const displacement = numberText(detail.displacement || nested(vehicle, 'vehicleEngine', ['engineDisplacement', 'displacement']) || firstValue(vehicle, ['engineDisplacement', 'displacement']));
   const price = nested(vehicle, 'offers', ['price']) || firstValue(vehicle, ['price', 'salePrice']);
   const currency = nested(vehicle, 'offers', ['priceCurrency']) || firstValue(vehicle, ['priceCurrency', 'currency']);
   const modification = firstValue(vehicle, ['trim', 'variant', 'package', 'modification']) ||
     (source === 'autotrader_ca' && /technik/i.test(pageTitle) ? 'Technik' : null);
-  const euroStandard = normalizeEuro(firstValue(vehicle, ['euroStandard', 'euro_standard', 'emissionClass', 'emissions', 'euro']));
-  const color = normalizeColor(firstValue(vehicle, ['color', 'vehicleColor', 'exteriorColor']));
+  const euroStandard = normalizeEuro(detail.euro || firstValue(vehicle, ['euroStandard', 'euro_standard', 'emissionClass', 'emissions', 'euro']));
+  const color = normalizeColor(detail.color || firstValue(vehicle, ['color', 'vehicleColor', 'exteriorColor']));
   const description = companyDescription;
   const fields: Array<{ key: string; value: string; source: string; proof: string }> = [];
   const push = (key: string, value: string | null) => { if (value) fields.push({ key, value, source, proof: job.source_url }); };
@@ -290,7 +320,9 @@ async function run() {
     await page.waitForTimeout(1500);
     const documents = await pageJson(page);
     if (!documents.length) throw new Error('В страницата не е намерен JSON.');
-    const payload = makePayload(job, documents, await page.title());
+    const detailText = await page.locator('body').innerText().catch(() => '');
+    const detail = valuesFromDetailText(detailText);
+    const payload = makePayload(job, documents, await page.title(), detail);
     const response = await fetch(ingestUrl, {
       method: 'POST',
       headers: {
