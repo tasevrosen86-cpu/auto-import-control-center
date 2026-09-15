@@ -13,6 +13,35 @@ function asText(value: unknown): string {
   return value === null || value === undefined ? '' : String(value);
 }
 
+function firstRaw(raw: Record<string, unknown>, keys: string[]): string {
+  const wanted = new Set(keys.map(key => key.toLowerCase()));
+  const seen = new Set<unknown>();
+  const walk = (value: unknown): string => {
+    if (!value || typeof value !== 'object' || seen.has(value)) return '';
+    seen.add(value);
+    if (Array.isArray(value)) {
+      for (const item of value) { const found = walk(item); if (found) return found; }
+      return '';
+    }
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      if (wanted.has(key.toLowerCase())) {
+        const text = asText(item).trim();
+        if (text) return text;
+      }
+    }
+    for (const item of Object.values(value as Record<string, unknown>)) {
+      const found = walk(item); if (found) return found;
+    }
+    return '';
+  };
+  return walk(raw);
+}
+
+function normaliseEuro(value: string): string {
+  const match = value.match(/(?:euro|евро)\\s*([1-6][a-z]?)/i);
+  return match ? `Euro ${match[1].toLowerCase()}` : value;
+}
+
 export type ImportMarketplace = 'korea' | 'canada';
 
 function chooseSource(marketplaces: VehicleMarketplace[], preferred?: ImportMarketplace): VehicleMarketplace | null {
@@ -38,10 +67,11 @@ export function createDraftSeed(vehicle: Vehicle, marketplaces: VehicleMarketpla
     month: source?.marketplace === 'canada' ? 'Декември' : asText(raw.production_month || raw.month),
     mileage: asText(source?.mileage_km ?? raw.mileage_km),
     fuel: vehicle.fuel,
-    gearbox: asText(raw.gearbox),
-    power: asText(raw.power_hp ?? raw.power),
-    displacement: asText(raw.displacement_cc),
-    color: asText(raw.color),
+    gearbox: firstRaw(raw, ['gearbox', 'transmission', 'vehicleTransmission']),
+    power: firstRaw(raw, ['power_hp', 'power', 'horsepower', 'enginePower']),
+    displacement: firstRaw(raw, ['displacement_cc', 'displacement', 'engineDisplacement', 'engineSize']),
+    euro_standard: normaliseEuro(firstRaw(raw, ['euro_standard', 'euroStandard', 'emissionClass', 'emissions', 'euro'])),
+    color: firstRaw(raw, ['color', 'vehicleColor', 'exteriorColor']),
     condition: 'Използван',
     drivetrain: asText(raw.drivetrain),
     vin: asText(source?.vin ?? raw.vin),
