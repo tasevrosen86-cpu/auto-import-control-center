@@ -80,7 +80,7 @@ jobs:
           tar -xzf /tmp/mobile-publisher.tar.gz -C "$PUBLISHER_DIR"
           cd "$PUBLISHER_DIR"
           npm ci
-          npx playwright install chromium
+          npx playwright install --with-deps chromium
 
           mkdir -p /home/ubuntu/.local/share/aicc-mobile-bg
           sudo install -m 600 /tmp/mobile-publisher.env /etc/aicc-mobile-publisher.env
