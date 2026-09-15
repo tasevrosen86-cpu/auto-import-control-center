@@ -42,6 +42,19 @@ function normaliseEuro(value: string): string {
   return match ? `Euro ${match[1].toLowerCase()}` : value;
 }
 
+function detailFallback(raw: Record<string, unknown>) {
+  const text = JSON.stringify(raw);
+  const pick = (patterns: RegExp[]) => patterns.map(pattern => text.match(pattern)?.[1]?.trim()).find(Boolean) || '';
+  return {
+    mileage: pick([/(?:mileage|odometer|пробег)[^0-9]{0,20}([0-9][0-9, .]*)/i]),
+    gearbox: pick([/(?:transmission|gearbox|скоростна кутия)[^:"]{0,10}[:"]\\s*([^,"}]+)/i]),
+    power: pick([/(?:horsepower|power|мощност)[^0-9]{0,20}([0-9][0-9 .]*)/i]),
+    displacement: pick([/(?:displacement|engineDisplacement|кубатура|работен обем)[^0-9]{0,20}([0-9][0-9 .]*)/i]),
+    euro: pick([/(?:euroStandard|euro_standard|emissionClass|екокатегория)[^:"]{0,10}[:"]\\s*([^,"}]+)/i]),
+    color: pick([/(?:color|vehicleColor|exteriorColor|цвят)[^:"]{0,10}[:"]\\s*([^,"}]+)/i]),
+  };
+}
+
 export type ImportMarketplace = 'korea' | 'canada';
 
 function chooseSource(marketplaces: VehicleMarketplace[], preferred?: ImportMarketplace): VehicleMarketplace | null {
@@ -58,6 +71,7 @@ export function createDraftSeed(vehicle: Vehicle, marketplaces: VehicleMarketpla
   const sourceLabel = source?.marketplace === 'korea' ? 'Encar' : source?.marketplace === 'canada' ? 'AutoTrader' : 'Каталог';
   const salePrice = vehicle.our_price_eur ?? source?.final_eur ?? null;
   const sourceUrl = source?.listing_url || null;
+  const detail = detailFallback(raw);
   const fields: Record<string, string> = {
     category: 'Автомобили и джипове',
     title: `${vehicle.make} ${vehicle.model} ${vehicle.model_year}`,
@@ -65,13 +79,13 @@ export function createDraftSeed(vehicle: Vehicle, marketplaces: VehicleMarketpla
     model: vehicle.model,
     year: asText(vehicle.model_year),
     month: source?.marketplace === 'canada' ? 'Декември' : asText(raw.production_month || raw.month),
-    mileage: asText(source?.mileage_km ?? raw.mileage_km),
+    mileage: asText(source?.mileage_km ?? raw.mileage_km) || detail.mileage,
     fuel: vehicle.fuel,
-    gearbox: firstRaw(raw, ['gearbox', 'transmission', 'vehicleTransmission']),
-    power: firstRaw(raw, ['power_hp', 'power', 'horsepower', 'enginePower']),
-    displacement: firstRaw(raw, ['displacement_cc', 'displacement', 'engineDisplacement', 'engineSize']),
-    euro_standard: normaliseEuro(firstRaw(raw, ['euro_standard', 'euroStandard', 'emissionClass', 'emissions', 'euro'])),
-    color: firstRaw(raw, ['color', 'vehicleColor', 'exteriorColor']),
+    gearbox: firstRaw(raw, ['gearbox', 'transmission', 'vehicleTransmission']) || detail.gearbox,
+    power: firstRaw(raw, ['power_hp', 'power', 'horsepower', 'enginePower']) || detail.power,
+    displacement: firstRaw(raw, ['displacement_cc', 'displacement', 'engineDisplacement', 'engineSize']) || detail.displacement,
+    euro_standard: normaliseEuro(firstRaw(raw, ['euro_standard', 'euroStandard', 'emissionClass', 'emissions', 'euro']) || detail.euro),
+    color: firstRaw(raw, ['color', 'vehicleColor', 'exteriorColor']) || detail.color,
     condition: 'Използван',
     drivetrain: asText(raw.drivetrain),
     vin: asText(source?.vin ?? raw.vin),
