@@ -131,6 +131,11 @@ function normalizeCondition(value: string | null): string | null {
   if (!value) return 'Използван';
   return value.toLowerCase().includes('new') ? 'Нов' : 'Използван';
 }
+function normalizeEuro(value: string | null): string | null {
+  if (!value) return null;
+  const match = value.match(/(?:euro|евро)\\s*([1-6][a-z]?)/i);
+  return match ? `Euro ${match[1].toLowerCase()}` : value;
+}
 function normalizeColor(value: string | null): string | null {
   if (!value) return null;
   const source = value.toLowerCase();
@@ -209,7 +214,8 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string)
   const currency = nested(vehicle, 'offers', ['priceCurrency']) || firstValue(vehicle, ['priceCurrency', 'currency']);
   const modification = firstValue(vehicle, ['trim', 'variant', 'package', 'modification']) ||
     (source === 'autotrader_ca' && /technik/i.test(pageTitle) ? 'Technik' : null);
-  const color = normalizeColor(firstValue(vehicle, ['color', 'vehicleColor']));
+  const euroStandard = normalizeEuro(firstValue(vehicle, ['euroStandard', 'euro_standard', 'emissionClass', 'emissions', 'euro']));
+  const color = normalizeColor(firstValue(vehicle, ['color', 'vehicleColor', 'exteriorColor']));
   const description = companyDescription;
   const fields: Array<{ key: string; value: string; source: string; proof: string }> = [];
   const push = (key: string, value: string | null) => { if (value) fields.push({ key, value, source, proof: job.source_url }); };
@@ -225,6 +231,7 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string)
   push('gearbox', gearbox);
   push('power', power);
   push('displacement', displacement);
+  push('euro_standard', euroStandard);
   push('color', color);
   push('doors', firstValue(vehicle, ['numberOfDoors', 'doors']));
   push('seats', firstValue(vehicle, ['seatingCapacity', 'seats']));
