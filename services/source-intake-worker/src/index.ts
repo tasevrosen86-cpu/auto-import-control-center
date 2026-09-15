@@ -224,7 +224,7 @@ function extrasFrom(root: JsonRecord): string[] {
   }
   return [...result];
 }
-function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string, detail: ReturnType<typeof valuesFromDetailText> = valuesFromDetailText('')) {
+function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string, detail: ReturnType<typeof valuesFromDetailText> = valuesFromDetailText(''), domImageUrls: string[] = []) {
   const vehicle = vehicleRecord(documents);
   const source = job.source_type;
   const brand = nested(vehicle, 'brand', ['name']) || firstValue(vehicle, ['make', 'manufacturer']);
@@ -293,7 +293,7 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string,
     },
     fields,
     extras: extrasFrom(vehicle),
-    images: imagesFrom(documents),
+    images: [...imagesFrom(documents), ...domImageUrls.filter(url => /^https?:\\/\\//i.test(url)).slice(0, 40).map((source_url, index) => ({ source_url, is_main: index === 0, display_order: index + 1 }))],
     raw_json: documents,
   };
 }
@@ -322,7 +322,8 @@ async function run() {
     if (!documents.length) throw new Error('В страницата не е намерен JSON.');
     const detailText = await page.locator('body').innerText().catch(() => '');
     const detail = valuesFromDetailText(detailText);
-    const payload = makePayload(job, documents, await page.title(), detail);
+    const domImageUrls = await page.locator('img').evaluateAll(nodes => nodes.map(node => (node as HTMLImageElement).currentSrc || (node as HTMLImageElement).src).filter(Boolean));
+    const payload = makePayload(job, documents, await page.title(), detail, domImageUrls);
     const response = await fetch(ingestUrl, {
       method: 'POST',
       headers: {
