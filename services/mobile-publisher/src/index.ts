@@ -210,7 +210,7 @@ async function populateStepOne(page: Page, fields: DraftField[], extras: DraftEx
   for (const label of wantedExtras) {
     const candidates = page.locator('label'); let matched = false;
     for (let i = 0; i < await candidates.count(); i += 1) {
-      const node = candidates.nth(i); const text = (await node.innerText().catch(() => '')).replace(/\\s+/g, ' ').trim().toLocaleLowerCase('bg');
+      const node = candidates.nth(i); const text = (await node.innerText().catch(() => '')).replace(/\s+/g, ' ').trim().toLocaleLowerCase('bg');
       if (text !== label.trim().toLocaleLowerCase('bg')) continue;
       const input = node.locator('input[type="checkbox"]').first();
       if (await input.count()) { await input.check(); matched = true; break; }
