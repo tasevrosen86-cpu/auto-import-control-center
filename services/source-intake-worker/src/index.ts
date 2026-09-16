@@ -107,6 +107,12 @@ function autotraderVehicle(documents: JsonRecord[]): JsonRecord {
   }));
   return best;
 }
+// Keeps track of which source actually supplied a value, so a field that ends
+// up empty can be traced back to the fallback chain instead of guessed at.
+function withSource(candidates: Array<[string, string | null]>): { value: string | null; from: string } {
+  for (const [from, value] of candidates) if (value) return { value, from };
+  return { value: null, from: 'none' };
+}
 function firstValue(root: unknown, keys: string[]): string | null {
   const wanted = new Set(keys.map(key => key.toLowerCase()));
   let found: string | null = null;
@@ -248,16 +254,24 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string,
   const autoDetail = source === 'autotrader_ca' ? autotraderVehicle(documents) : {};
   const brand = nested(vehicle, 'brand', ['name']) || firstValue(vehicle, ['make', 'manufacturer']);
   const model = firstValue(vehicle, ['model', 'modelName']);
-  const year = firstValue(vehicle, ['vehicleModelDate', 'modelYear', 'year']) ||
-    scalar(autoDetail.modelYear);
-  const mileage = numberText(
-    detail.mileage ||
-    nested(vehicle, 'mileageFromOdometer', ['value']) ||
-    scalar(autoDetail.mileageInKmRaw) ||
-    firstValue(vehicle, ['mileage', 'odometer']) ||
-    pageTitle.match(/([0-9][0-9, .]*)\s*km\b/i)?.[1] || null,
-  );
-  const fuel = normalizeFuel(scalar(asRecord(autoDetail.fuelCategory).formatted) || firstValue(vehicle, ['fuelType', 'fuel']));
+  const yearPick = withSource([
+    ['jsonld', firstValue(vehicle, ['vehicleModelDate', 'modelYear', 'year'])],
+    ['autotrader.listingDetails', scalar(autoDetail.modelYear)],
+  ]);
+  const mileagePick = withSource([
+    ['detail_text', detail.mileage],
+    ['jsonld.mileageFromOdometer', nested(vehicle, 'mileageFromOdometer', ['value'])],
+    ['autotrader.listingDetails', scalar(autoDetail.mileageInKmRaw)],
+    ['jsonld.odometer', firstValue(vehicle, ['mileage', 'odometer'])],
+    ['page_title', pageTitle.match(/([0-9][0-9, .]*)\s*km\b/i)?.[1] || null],
+  ]);
+  const fuelPick = withSource([
+    ['autotrader.listingDetails', scalar(asRecord(autoDetail.fuelCategory).formatted)],
+    ['jsonld', firstValue(vehicle, ['fuelType', 'fuel'])],
+  ]);
+  const year = yearPick.value;
+  const mileage = numberText(mileagePick.value);
+  const fuel = normalizeFuel(fuelPick.value);
   const gearbox = normalizeGearbox(detail.gearbox || firstValue(vehicle, ['vehicleTransmission', 'transmission', 'gearbox']));
   const power = numberText(detail.power || nested(vehicle, 'vehicleEngine', ['enginePower', 'power']) || firstValue(vehicle, ['horsepower', 'powerHp', 'enginePower']));
   const displacement = numberText(detail.displacement || nested(vehicle, 'vehicleEngine', ['engineDisplacement', 'displacement']) || firstValue(vehicle, ['engineDisplacement', 'displacement']));
@@ -302,6 +316,15 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string,
   push('source_listing_id', firstValue(vehicle, ['sku', 'listingId', 'id']) || job.source_url.match(/[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}/i)?.[0] || null);
   push('source_price', price);
   push('currency', currency === 'EUR' ? 'EUR' : null);
+
+  console.log(JSON.stringify({
+    event: 'source_field_trace',
+    source_type: source,
+    source_url: job.source_url,
+    year: { value: year, from: yearPick.from },
+    mileage: { value: mileage, from: mileagePick.from },
+    fuel: { value: fuel, from: fuelPick.from },
+  }));
 
   return {
     draft_id: job.draft_id,
