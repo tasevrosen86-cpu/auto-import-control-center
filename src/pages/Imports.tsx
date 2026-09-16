@@ -899,6 +899,27 @@ function draftAutofillRows(draft: MobileBgDraft, loadedFields: MobileBgDraftFiel
     });
 }
 
+// Fields the source determines authoritatively, so an extraction cannot be
+// replaced by a stale value from the form. Everything else stays editable:
+// the optional fields Mobile.bg does not require (modification, power,
+// displacement, euro standard, colour, VIN) plus Заглавие and Цена, which the
+// broker always sets by hand.
+const SOURCE_LOCKED_FIELDS = new Set([
+  'category', 'make', 'model', 'year', 'mileage', 'fuel', 'gearbox',
+  'condition', 'drivetrain', 'currency', 'description', 'final_description',
+  'location', 'seller_name', 'phone', 'ad_type', 'source_type',
+]);
+
+function isSourceImported(draft: MobileBgDraft): boolean {
+  return /^(?:encar|autotrader|autotrader_ca|script_json)$/i.test(String(draft.intake_origin || draft.source_type || ''))
+    || Boolean(draft.source_url);
+}
+
+function isFieldLocked(draft: MobileBgDraft, fields: MobileBgDraftField[], field: MobileBgFieldDef): boolean {
+  if (!isSourceImported(draft) || !SOURCE_LOCKED_FIELDS.has(field.key)) return false;
+  return Boolean(fields.find(row => row.field_key === field.key)?.value);
+}
+
 function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void }) {
   const [draft, setDraft] = useState<MobileBgDraft | null>(null);
   const [fields, setFields] = useState<MobileBgDraftField[]>([]);
@@ -967,6 +988,10 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
         .concat(mobileBgVisibleFieldsBySection('publishing'))
         .concat(mobileBgVisibleFieldsBySection('source_control'))
         .filter((def, index, all) => all.findIndex(item => item.key === def.key) === index)
+        // Locked fields keep the value the extractor produced. Writing them back
+        // from the form would relabel extracted data as a manual edit and could
+        // push stale values over a fresh extraction.
+        .filter(def => !draft || !isFieldLocked(draft, fields, def))
         .map(def => ({
           draft_id: draftId,
           field_key: def.key,
@@ -986,7 +1011,10 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
         draft_id: draftId, action: 'DRAFT_FIELDS_MANUALLY_UPDATED', actor: 'Росен',
         details: { fields: rows.filter(row => row.value !== null).map(row => row.field_key) },
       });
-      setFields(rows as MobileBgDraftField[]);
+      setFields(current => {
+        const updated = new Map(rows.map(row => [row.field_key, row as unknown as MobileBgDraftField]));
+        return current.map(field => updated.get(field.field_key) || field);
+      });
       setDraft(current => current ? { ...current, updated_at: new Date().toISOString() } : current);
     } catch (error) {
       setSaveFieldsError(error instanceof Error ? error.message : 'Промените не бяха записани.');
@@ -1092,13 +1120,18 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
                 {definitions.map(def => {
                   const saved = fieldsByKey.get(def.key);
+                  const locked = isFieldLocked(draft, fields, def);
+                  const value = locked ? (saved?.value || '') : (editValues[def.key] ?? saved?.value ?? '');
                   return (
-                    <div key={def.key} className={`rounded border p-2 ${saved?.value ? 'border-slate-200' : def.required ? 'border-amber-200 bg-amber-50/40' : 'border-slate-200'}`}>
-                      <p className="text-[10px] font-bold text-slate-700">{def.key === 'final_description' ? 'Допълнителна информация' : def.mobile_bg_label}{def.required ? ' *' : ''}</p>
+                    <div key={def.key} className={`rounded border p-2 ${locked ? 'border-emerald-200 bg-emerald-50/40' : saved?.value ? 'border-slate-200' : def.required ? 'border-amber-200 bg-amber-50/40' : 'border-slate-200'}`}>
+                      <p className="text-[10px] font-bold text-slate-700">
+                        {def.key === 'final_description' ? 'Допълнителна информация' : def.mobile_bg_label}{def.required ? ' *' : ''}
+                        {locked && <span className="ml-1 font-normal text-emerald-700">🔒 заключено</span>}
+                      </p>
                       {def.field_type === 'textarea' || def.key === 'description' || def.key === 'final_description' ? (
-                        <textarea value={editValues[def.key] ?? saved?.value ?? ''} onChange={e => setEditValues(prev => ({ ...prev, [def.key]: e.target.value }))} rows={def.key === 'final_description' ? 7 : 3} className="mt-1 w-full rounded border border-slate-300 bg-white p-1.5 text-[11px] text-slate-800 outline-none focus:border-blue-500" placeholder="Въведи стойност..." />
+                        <textarea value={value} readOnly={locked} disabled={locked} onChange={e => setEditValues(prev => ({ ...prev, [def.key]: e.target.value }))} rows={def.key === 'final_description' ? 7 : 3} className={`mt-1 w-full rounded border border-slate-300 p-1.5 text-[11px] outline-none focus:border-blue-500 ${locked ? 'cursor-not-allowed bg-emerald-50 text-slate-600' : 'bg-white text-slate-800'}`} placeholder="Въведи стойност..." />
                       ) : (
-                        <input value={editValues[def.key] ?? saved?.value ?? ''} onChange={e => setEditValues(prev => ({ ...prev, [def.key]: e.target.value }))} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-[11px] text-slate-800 outline-none focus:border-blue-500" placeholder="Въведи стойност..." />
+                        <input value={value} readOnly={locked} disabled={locked} onChange={e => setEditValues(prev => ({ ...prev, [def.key]: e.target.value }))} className={`mt-1 h-8 w-full rounded border border-slate-300 px-2 text-[11px] outline-none focus:border-blue-500 ${locked ? 'cursor-not-allowed bg-emerald-50 text-slate-600' : 'bg-white text-slate-800'}`} placeholder="Въведи стойност..." />
                       )}
                       <div className="mt-1 flex flex-wrap items-center gap-2 text-[9px] text-slate-400">
                         <span>Източник: {saved ? (SOURCE_LABELS_BG[saved.source] || saved.source) : (SOURCE_LABELS_BG[def.source] || def.source)}</span>

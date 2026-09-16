@@ -110,7 +110,7 @@ export const MOBILE_BG_FIELD_MAP: MobileBgFieldDef[] = [
   { key: 'offroad_package', mobile_bg_label: 'Офроуд пакет', our_db_key: 'extra_offroad', field_type: 'checkbox', required: false, source: 'encar', agent_can_fill: true, needs_human_confirmation: true, section: 'extras', group: 'Специализирани' },
 
   // === 4. Описание ===
-  { key: 'title', mobile_bg_label: 'Заглавие на обявата', our_db_key: 'title', field_type: 'text', required: true, source: 'agent', agent_can_fill: true, needs_human_confirmation: true, section: 'description' },
+  { key: 'title', mobile_bg_label: 'Заглавие', our_db_key: 'title', field_type: 'text', required: true, source: 'agent', agent_can_fill: true, needs_human_confirmation: true, section: 'description' },
   { key: 'description', mobile_bg_label: 'Описание', our_db_key: 'description', field_type: 'textarea', required: true, source: 'broker', agent_can_fill: false, needs_human_confirmation: true, section: 'description' },
   { key: 'auto_description', mobile_bg_label: 'Автоматично генерирано описание', our_db_key: 'auto_description', field_type: 'textarea', required: false, source: 'agent', agent_can_fill: true, needs_human_confirmation: true, section: 'description' },
   { key: 'broker_description', mobile_bg_label: 'Ръчно описание от брокера', our_db_key: 'broker_description', field_type: 'textarea', required: false, source: 'broker', agent_can_fill: false, needs_human_confirmation: false, section: 'description' },

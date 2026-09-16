@@ -107,6 +107,94 @@ function autotraderVehicle(documents: JsonRecord[]): JsonRecord {
   }));
   return best;
 }
+// AutoTrader publishes the listing headline as the last breadcrumb entry, which
+// repeats in both the JSON-LD itemListElement and the Next.js breadcrumbs array.
+// Both are used as independent confirmations; generic navigation labels and bare
+// taxonomy terms (make/model) are skipped so the headline itself is what remains.
+// AutoTrader keeps the trim in the Next.js listing payload rather than JSON-LD:
+// modelVersionInput holds the dealer-written trim ("Progressiv * CARPLAY / ...")
+// and variant the body style ("Sportback"). Mobile.bg shows this as Модификация.
+function autotraderModification(documents: JsonRecord[]): { value: string | null; from: string } {
+  const vehicle = autotraderVehicle(documents);
+  return withSource([
+    ['listingDetails.vehicle.modelVersionInput', scalar(vehicle.modelVersionInput)],
+    ['listingDetails.vehicle.variant', scalar(vehicle.variant)],
+    ['listingDetails.vehicle.modelVersionCustom', scalar(vehicle.modelVersionCustom)],
+  ]);
+}
+
+const GENERIC_TITLE = /^(?:home|search|shared\.home|shared\.search_noun)$/i;
+
+function listingTitleFromBreadcrumbs(documents: JsonRecord[]): string | null {
+  const names: string[] = [];
+  documents.forEach(document => walk(document, record => {
+    for (const [key, value] of Object.entries(record)) {
+      if (key !== 'breadcrumbs' && key !== 'itemListElement') continue;
+      if (!Array.isArray(value)) continue;
+      for (const item of value) {
+        const name = scalar(asRecord(item).name);
+        if (name) names.push(name.replace(/\s+/g, ' ').trim());
+      }
+    }
+  }));
+  const meaningful = names.filter(name => name.length >= 8 && !GENERIC_TITLE.test(name));
+  return meaningful[meaningful.length - 1] || null;
+}
+
+function normalizeTitle(value: string | null): string | null {
+  if (!value) return null;
+  const text = value.replace(/\s+/g, ' ').trim();
+  return text.length >= 4 ? text.slice(0, 200) : null;
+}
+
+// The same car photo is served at several sizes (1280x960, 720x540 ...). Group by
+// photo identity so each car photo yields exactly one draft image, keeping the
+// largest variant. Distinct photos stay distinct.
+function photoIdentity(url: string): string {
+  const listing = url.match(/listing-images\/([0-9a-f-]+_[0-9a-f-]+)\./i);
+  if (listing) return `listing:${listing[1].toLowerCase()}`;
+  return `url:${url.replace(/\/(?:resize|quality)\/[^/]*/gi, '').toLowerCase()}`;
+}
+
+function pixelArea(url: string): number {
+  const size = url.match(/(\d{2,4})x(\d{2,4})/);
+  if (size) return Number(size[1]) * Number(size[2]);
+  return /original/i.test(url) ? Number.MAX_SAFE_INTEGER : 0;
+}
+
+// AutoTrader (autoscout24) serves the same photo as .webp or .jpg depending on
+// the trailing size path. The draft is published into Mobile.bg as .jpg files,
+// so ask for the JPEG variant of the largest available size.
+function publishablePhotoUrl(url: string): string {
+  if (!/pictures\.autoscout24\.net\/listing-images\//i.test(url)) return url;
+  return url.replace(/\.webp(?:\?.*)?$/i, '.jpg');
+}
+
+// AutoTrader serves site chrome, dealer logos, tracking pixels and icons from
+// the same DOM <img> collection as the car photos. Only actual listing photos
+// belong in the draft, so off-site tracking and non-photo assets are dropped.
+const JUNK_IMAGE = /doubleclick|googletagmanager|google-analytics|trackimp|tracking|pixel|\/ad\/|\/ads\/|dealer-info|dealer-logo|logo|icon|arrow|sprite|placeholder|no-photo|noimage|banner|facebook|instagram/i;
+
+function isListingPhoto(url: string): boolean {
+  if (!/^https?:\/\//i.test(url)) return false;
+  if (/\.svg(?:\?|$)/i.test(url)) return false;
+  return !JUNK_IMAGE.test(url);
+}
+
+function dedupeImages(images: Array<{ source_url: string; is_main: boolean; display_order: number }>) {
+  const best = new Map<string, { source_url: string; is_main: boolean; display_order: number }>();
+  for (const image of images) {
+    if (!isListingPhoto(image.source_url)) continue;
+    const key = photoIdentity(image.source_url);
+    const current = best.get(key);
+    if (!current || pixelArea(image.source_url) > pixelArea(current.source_url)) best.set(key, image);
+  }
+  return [...best.values()].slice(0, 40).map((image, index) => ({
+    source_url: publishablePhotoUrl(image.source_url),
+    is_main: index === 0,
+    display_order: index + 1,
+  }));
+}
 // Keeps track of which source actually supplied a value, so a field that ends
 // up empty can be traced back to the fallback chain instead of guessed at.
 function withSource(candidates: Array<[string, string | null]>): { value: string | null; from: string } {
@@ -234,19 +322,13 @@ function imagesFrom(root: unknown): JsonRecord[] {
     display_order: index + 1,
   }));
 }
-function extrasFrom(root: JsonRecord): string[] {
-  const known = ['feature', 'features', 'additionalProperty', 'vehicleEquipment', 'equipment'];
-  const result = new Set<string>();
-  for (const key of known) {
-    const values = root[key];
-    const list = Array.isArray(values) ? values : values ? [values] : [];
-    for (const item of list) {
-      const record = asRecord(item);
-      const text = scalar(item) || scalar(record.name) || scalar(record.value);
-      if (text && text.length < 120) result.add(text);
-    }
-  }
-  return [...result];
+function normalizeDrivetrain(value: string | null): string | null {
+  if (!value) return null;
+  const source = value.toLowerCase();
+  if (source.includes('all wheel') || source.includes('awd') || source.includes('4wd') || source.includes('4x4')) return '4x4';
+  if (source.includes('rear')) return 'Задно';
+  if (source.includes('front') || source.includes('fwd')) return 'Предно';
+  return value;
 }
 function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string, detail: ReturnType<typeof valuesFromDetailText> = valuesFromDetailText(''), domImageUrls: string[] = []) {
   const vehicle = vehicleRecord(documents);
@@ -254,6 +336,10 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string,
   const autoDetail = source === 'autotrader_ca' ? autotraderVehicle(documents) : {};
   const brand = nested(vehicle, 'brand', ['name']) || firstValue(vehicle, ['make', 'manufacturer']);
   const model = firstValue(vehicle, ['model', 'modelName']);
+  const vehicleTitle = withSource([
+    ['jsonld.itemListElement', normalizeTitle(listingTitleFromBreadcrumbs(documents))],
+    ['page_title', normalizeTitle(pageTitle)],
+  ]);
   const yearPick = withSource([
     ['jsonld', firstValue(vehicle, ['vehicleModelDate', 'modelYear', 'year'])],
     ['autotrader.listingDetails', scalar(autoDetail.modelYear)],
@@ -277,20 +363,21 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string,
   const displacement = numberText(detail.displacement || nested(vehicle, 'vehicleEngine', ['engineDisplacement', 'displacement']) || firstValue(vehicle, ['engineDisplacement', 'displacement']));
   const price = nested(vehicle, 'offers', ['price']) || firstValue(vehicle, ['price', 'salePrice']);
   const currency = nested(vehicle, 'offers', ['priceCurrency']) || firstValue(vehicle, ['priceCurrency', 'currency']);
-  const modification = firstValue(vehicle, ['trim', 'variant', 'package', 'modification']) ||
-    (source === 'autotrader_ca' && /technik/i.test(pageTitle) ? 'Technik' : null);
   const euroStandard = normalizeEuro(detail.euro || firstValue(vehicle, ['euroStandard', 'euro_standard', 'emissionClass', 'emissions', 'euro']));
   const color = normalizeColor(detail.color || firstValue(vehicle, ['color', 'vehicleColor', 'exteriorColor']));
   const description = companyDescription;
   const fields: Array<{ key: string; value: string; source: string; proof: string }> = [];
   const push = (key: string, value: string | null) => { if (value) fields.push({ key, value, source, proof: job.source_url }); };
+  const pushTrace = (key: string, pick: { value: string | null; from: string }) => {
+    if (pick.value) fields.push({ key, value: pick.value, source: pick.from, proof: job.source_url });
+  };
 
   push('category', 'Автомобили и джипове');
   push('make', brand);
   push('model', model);
-  push('modification', modification);
+  pushTrace('title', vehicleTitle);
+  pushTrace('modification', source === 'autotrader_ca' ? autotraderModification(documents) : withSource([]));
   push('year', year);
-  if (source === 'autotrader_ca') push('month', 'Декември');
   push('mileage', mileage);
   push('fuel', fuel);
   push('gearbox', gearbox);
@@ -302,7 +389,7 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string,
   push('seats', firstValue(vehicle, ['seatingCapacity', 'seats']));
   push('vin', firstValue(vehicle, ['vehicleIdentificationNumber', 'vin']));
   push('condition', normalizeCondition(firstValue(vehicle, ['itemCondition', 'condition'])));
-  push('drivetrain', firstValue(vehicle, ['driveWheelConfiguration', 'drivetrain', 'driveType']));
+  push('drivetrain', normalizeDrivetrain(firstValue(vehicle, ['driveWheelConfiguration', 'drivetrain', 'driveType']) || scalar(autoDetail.driveTrain)));
   push('description', description);
   push('final_description', description);
   push('location', source === 'encar' ? 'Извън страната → Южна Корея' : 'Извън страната → Канада');
@@ -315,15 +402,25 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string,
   push('source_url', job.source_url);
   push('source_listing_id', firstValue(vehicle, ['sku', 'listingId', 'id']) || job.source_url.match(/[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}/i)?.[0] || null);
   push('source_price', price);
-  push('currency', currency === 'EUR' ? 'EUR' : null);
+  // Mobile.bg listings are entered in EUR, so the currency control is fixed to
+  // EUR while the source price keeps its own number. The source currency (CAD on
+  // AutoTrader, KRW on Encar) is never copied into the publish price.
+  push('currency', 'EUR');
+
+  const payloadImages = dedupeImages([
+    ...imagesFrom(documents),
+    ...domImageUrls.filter(url => /^https?:\/\//i.test(url)).slice(0, 40).map(source_url => ({ source_url, is_main: false, display_order: 0 })),
+  ]);
 
   console.log(JSON.stringify({
     event: 'source_field_trace',
     source_type: source,
     source_url: job.source_url,
+    title: { value: vehicleTitle.value, from: vehicleTitle.from },
     year: { value: year, from: yearPick.from },
     mileage: { value: mileage, from: mileagePick.from },
     fuel: { value: fuel, from: fuelPick.from },
+    images: { count: payloadImages.length, main: payloadImages[0]?.source_url || null },
   }));
 
   return {
@@ -336,8 +433,8 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string,
       page_title: pageTitle,
     },
     fields,
-    extras: extrasFrom(vehicle),
-    images: [...imagesFrom(documents), ...domImageUrls.filter(url => /^https?:\/\//i.test(url)).slice(0, 40).map((source_url, index) => ({ source_url, is_main: index === 0, display_order: index + 1 }))],
+    extras: [],
+    images: payloadImages,
     raw_json: documents,
   };
 }

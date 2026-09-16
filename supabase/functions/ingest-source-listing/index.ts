@@ -50,6 +50,11 @@ const fieldMeta: Record<string, { label: string; dbKey: string; fieldType: strin
   description_auto: { label: 'Автоматично описание', dbKey: 'description_auto', fieldType: 'textarea' },
   description_manual: { label: 'Ръчно добавен текст', dbKey: 'description_manual', fieldType: 'textarea' },
   description_final: { label: 'Финално описание за Mobile.bg', dbKey: 'description_final', fieldType: 'textarea' },
+  title: { label: 'Заглавие', dbKey: 'title', fieldType: 'text' },
+  description: { label: 'Описание', dbKey: 'description', fieldType: 'textarea' },
+  final_description: { label: 'Финално описание за Mobile.bg', dbKey: 'final_description', fieldType: 'textarea' },
+  company_template: { label: 'Шаблон на фирмата', dbKey: 'company_template', fieldType: 'select' },
+  description_language: { label: 'Език на описанието', dbKey: 'description_language', fieldType: 'select' },
   location: { label: 'Населено място/област', dbKey: 'location', fieldType: 'text' },
   seller_name: { label: 'Име на продавача/фирмата', dbKey: 'seller_name', fieldType: 'text' },
   broker: { label: 'Брокер', dbKey: 'broker_name', fieldType: 'text' },
@@ -162,7 +167,10 @@ Deno.serve(async (request) => {
   if (!sourceUrl) return response({ error: 'JSON трябва да съдържа source.url.' }, 400);
   const missing = requiredForReview.filter(key => !byKey.get(key));
   const nextStatus = missing.length === 0 ? 'READY_FOR_REVIEW' : 'DRAFT';
-  const title = [byKey.get('make'), byKey.get('model'), byKey.get('year')].filter(Boolean).join(' ') || `Извлечена обява ${listingId || ''}`.trim();
+  const extractedTitle = byKey.get('title');
+  const title = extractedTitle
+    || [byKey.get('make'), byKey.get('model'), byKey.get('year')].filter(Boolean).join(' ')
+    || `Извлечена обява ${listingId || ''}`.trim();
 
   const requestedDraftId = asString(payload.draft_id);
   let draftId = requestedDraftId;
