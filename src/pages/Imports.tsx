@@ -86,6 +86,13 @@ export function Imports({ openDraftId = null, onDraftOpened }: ImportsProps) {
     return drafts.filter(d => d.status === statusFilter);
   }, [drafts, statusFilter]);
 
+  // Published ads keep both links side by side so the broker can jump to the
+  // live Mobile.bg ad and back to the source to confirm it is still listed.
+  const publishedDrafts = useMemo(
+    () => drafts.filter(d => d.status === 'PUBLISHED' || d.mobile_bg_url),
+    [drafts]
+  );
+
   const draftStats = useMemo(() => ({
     total: drafts.length,
     draft: drafts.filter(d => d.status === 'DRAFT').length,
@@ -228,6 +235,63 @@ export function Imports({ openDraftId = null, onDraftOpened }: ImportsProps) {
             </tbody>
           </table>
         </div>
+      </div>
+
+      {/* Published listings: direct pair of Mobile.bg ad + original source for quick checks */}
+      <div className="overflow-hidden rounded-md border border-emerald-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-emerald-100 bg-emerald-50/60 px-3 py-2">
+          <h3 className="text-sm font-bold text-emerald-900">Публикувани обяви</h3>
+          <span className="text-[10px] text-emerald-700">Линк към обявата в Mobile.bg и към източника — за бърза проверка дали обявата е още налична</span>
+        </div>
+        {publishedDrafts.length === 0 ? (
+          <div className="py-8 text-center text-xs text-slate-400">Още няма публикувани обяви.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[900px] text-left text-[11px]">
+              <thead>
+                <tr className="border-b border-slate-200 bg-[#edf3f9] text-[9px] font-extrabold text-slate-700">
+                  <th className="px-2 py-2">Автомобил</th>
+                  <th className="px-2 py-1 text-center">Mobile.bg ID</th>
+                  <th className="px-2 py-1 text-center">Mobile.bg обява</th>
+                  <th className="px-2 py-1 text-center">Източник</th>
+                  <th className="px-2 py-1 text-center">Публикувана</th>
+                  <th className="px-2 py-1 text-center">Последна проверка</th>
+                  <th className="px-2 py-1 text-center">Действие</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {publishedDrafts.map(d => (
+                  <tr key={d.id} className="hover:bg-emerald-50/40">
+                    <td className="px-2 py-1.5">
+                      <p className="font-semibold text-slate-800">{d.title || [d.source_type, d.source_listing_id].filter(Boolean).join(' · ') || 'Без заглавие'}</p>
+                      <p className="text-slate-500">
+                        {d.source_type === 'encar' ? '🇰🇷' : (d.source_type === 'autotrader' || d.source_type === 'autotrader_ca') ? '🇨🇦' : '📋'} {d.source_type}
+                      </p>
+                    </td>
+                    <td className="px-2 py-1 text-center text-slate-600">{d.mobile_bg_listing_id || '—'}</td>
+                    <td className="px-2 py-1 text-center">
+                      {d.mobile_bg_url
+                        ? <a href={d.mobile_bg_url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="font-semibold text-blue-600 hover:underline">Отвори обявата</a>
+                        : <span className="text-slate-300">—</span>}
+                    </td>
+                    <td className="px-2 py-1 text-center">
+                      {d.source_url
+                        ? <a href={d.source_url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="font-semibold text-blue-600 hover:underline">Отвори източника</a>
+                        : <span className="text-slate-300">—</span>}
+                    </td>
+                    <td className="px-2 py-1 text-center text-slate-500">{d.published_at ? timeAgo(d.published_at) : '—'}</td>
+                    <td className="px-2 py-1 text-center text-slate-500">{d.last_checked_at ? timeAgo(d.last_checked_at) : '—'}</td>
+                    <td className="px-2 py-1 text-center">
+                      <button onClick={e => { e.stopPropagation(); handleSelectDraft(d.id); }} className="rounded border border-blue-200 bg-blue-50 px-2 py-1 font-bold text-blue-600 hover:bg-blue-100">
+                        <Eye className="inline h-3 w-3" /> Отвори
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* Import history */}
@@ -546,7 +610,7 @@ function DraftEditor({ sourceUrl, onBack, onSave }: DraftEditorProps) {
                     onProofChange={(key, val) => setExtraProofs(prev => ({ ...prev, [key]: val }))}
                   />
                 ) : section === 'images' ? (
-                  <ImagesSection />
+                  <ImagesSection images={[]} onUpdate={() => undefined} />
                 ) : (
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
                     {fields.map(field => (
@@ -774,56 +838,88 @@ function ExtrasSection({ selectedExtras, onToggle, extraProofs, onProofChange }:
 // Images Section
 // ============================================================
 
-function ImagesSection() {
+const MOBILE_BG_MAX_PHOTOS = 17;
+
+function ImagesSection({ images, onUpdate }: {
+  images: MobileBgDraftImage[];
+  onUpdate: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const selected = images.filter(image => image.is_selected);
+  const overLimit = selected.length > MOBILE_BG_MAX_PHOTOS;
+
+  async function updateImage(id: string, changes: Partial<MobileBgDraftImage>) {
+    setBusy(true);
+    setError(null);
+    try {
+      const { error: updateError } = await supabase.from('mobile_bg_draft_images').update(changes).eq('id', id);
+      if (updateError) throw updateError;
+      onUpdate();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Промяната не бе записана.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleSelection(image: MobileBgDraftImage) {
+    if (!image.is_selected && overLimit) {
+      setError(`Mobile.bg приема до ${MOBILE_BG_MAX_PHOTOS} снимки. Откачи една, преди да избереш нова.`);
+      return;
+    }
+    await updateImage(image.id, { is_selected: !image.is_selected });
+  }
+
+  async function selectFirstAsMain() {
+    if (images[0]) await updateImage(images[0].id, { is_main: true });
+  }
+
+  if (images.length === 0) {
+    return <div className="rounded border border-dashed border-slate-300 p-3 text-[11px] text-slate-500">Няма извлечени снимки за тази чернова.</div>;
+  }
+
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-        <div className="rounded border border-slate-200 p-2">
-          <label className="text-[10px] font-bold text-slate-700">Снимки от източника</label>
-          <div className="mt-1 flex items-center justify-center rounded border border-dashed border-slate-300 p-4 text-slate-400">
-            <ImageIcon className="h-6 w-6" />
-          </div>
-        </div>
-        <div className="rounded border border-slate-200 p-2">
-          <label className="text-[10px] font-bold text-slate-700">Избрани за публикуване</label>
-          <div className="mt-1 flex items-center justify-center rounded border border-dashed border-slate-300 p-4 text-slate-400">
-            <ImageIcon className="h-6 w-6" />
-          </div>
-        </div>
-        <div className="rounded border border-slate-200 p-2">
-          <label className="text-[10px] font-bold text-slate-700">Основна снимка</label>
-          <div className="mt-1 flex items-center justify-center rounded border border-dashed border-slate-300 p-4 text-slate-400">
-            <ImageIcon className="h-6 w-6" />
-          </div>
-        </div>
+      {error && <div className="rounded border border-rose-200 bg-rose-50 px-2 py-1.5 text-[11px] text-rose-700">{error}</div>}
+      <div className="flex flex-wrap items-center gap-3 rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-[11px]">
+        <span className="font-bold text-slate-700">Избрани: <span className={overLimit ? 'text-rose-600' : 'text-emerald-600'}>{selected.length}</span> / {MOBILE_BG_MAX_PHOTOS}</span>
+        <span className="text-slate-500">Извлечени от източника: {images.length}</span>
+        <button onClick={selectFirstAsMain} disabled={busy} className="rounded border border-slate-300 bg-white px-2 py-0.5 font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50">Първата като основна</button>
       </div>
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-        <div className="rounded border border-slate-200 p-2">
-          <label className="text-[10px] font-bold text-slate-700">Подредба</label>
-          <input type="text" placeholder="1,2,3..." className="mt-1 h-8 w-full rounded border border-slate-200 px-2 text-[11px] text-slate-700 outline-none focus:border-blue-400" />
-        </div>
-        <div className="rounded border border-slate-200 p-2">
-          <label className="text-[10px] font-bold text-slate-700">Статус на обработка</label>
-          <select className="mt-1 h-8 w-full rounded border border-slate-200 px-2 text-[11px] text-slate-700 outline-none focus:border-blue-400">
-            <option>Чакащи</option><option>В обработка</option><option>Готови</option><option>Грешка</option>
-          </select>
-        </div>
-        <div className="flex items-center gap-2 rounded border border-slate-200 p-2">
-          <input type="checkbox" className="h-3.5 w-3.5" />
-          <label className="text-[10px] font-medium text-slate-700">JPG готова за Mobile.bg</label>
-        </div>
-        <div className="rounded border border-slate-200 p-2">
-          <label className="text-[10px] font-bold text-slate-700">Оригинален URL</label>
-          <input type="text" placeholder="https://..." className="mt-1 h-8 w-full rounded border border-slate-200 px-2 text-[11px] text-slate-700 outline-none focus:border-blue-400" />
-        </div>
-        <div className="rounded border border-slate-200 p-2">
-          <label className="text-[10px] font-bold text-slate-700">Локален/сървърен файл</label>
-          <input type="text" placeholder="/path/to/file.jpg" className="mt-1 h-8 w-full rounded border border-slate-200 px-2 text-[11px] text-slate-700 outline-none focus:border-blue-400" />
-        </div>
-        <div className="flex items-center gap-2 rounded border border-slate-200 p-2">
-          <input type="checkbox" className="h-3.5 w-3.5" />
-          <label className="text-[10px] font-medium text-slate-700">Проверка „реална снимка на автомобил"</label>
-        </div>
+      {overLimit && <div className="rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">Маркирани са повече от {MOBILE_BG_MAX_PHOTOS} снимки. При публикуване ще се качат само първите {MOBILE_BG_MAX_PHOTOS} по подредба.</div>}
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+        {images.map(image => (
+          <div key={image.id} className={`overflow-hidden rounded border ${image.is_selected ? 'border-emerald-300 ring-1 ring-emerald-200' : 'border-slate-200'} bg-white`}>
+            <div className="relative h-24 bg-slate-100">
+              {image.source_url
+                ? <img src={image.source_url} alt="" loading="lazy" className="h-24 w-full object-cover" />
+                : <div className="flex h-24 items-center justify-center text-slate-400"><ImageIcon className="h-5 w-5" /></div>}
+              {image.is_main && <span className="absolute left-1 top-1 rounded bg-amber-500 px-1 py-0.5 text-[9px] font-bold text-white">Основна</span>}
+              <span className="absolute right-1 top-1 rounded bg-slate-900/70 px-1 py-0.5 text-[9px] font-bold text-white">{image.display_order}</span>
+            </div>
+            <div className="space-y-1 p-1.5">
+              <label className="flex items-center gap-1 text-[10px] text-slate-700">
+                <input type="checkbox" checked={image.is_selected} disabled={busy} onChange={() => toggleSelection(image)} className="h-3.5 w-3.5" />
+                Избрана
+              </label>
+              <label className="flex items-center gap-1 text-[10px] text-slate-700">
+                <input type="radio" name="main_image" checked={image.is_main} disabled={busy} onChange={() => updateImage(image.id, { is_main: true })} className="h-3.5 w-3.5" />
+                Основна
+              </label>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  value={image.display_order}
+                  disabled={busy}
+                  onChange={e => updateImage(image.id, { display_order: Number(e.target.value) || 0 })}
+                  className="h-6 w-12 rounded border border-slate-200 px-1 text-[10px] text-slate-700 outline-none focus:border-blue-400"
+                />
+                <span className="text-[9px] text-slate-400">{image.converted_jpg ? 'JPG' : 'източник'}</span>
+              </div>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -899,6 +995,27 @@ function draftAutofillRows(draft: MobileBgDraft, loadedFields: MobileBgDraftFiel
     });
 }
 
+// Fields the source determines authoritatively, so an extraction cannot be
+// replaced by a stale value from the form. Everything else stays editable:
+// the optional fields Mobile.bg does not require (modification, power,
+// displacement, euro standard, colour, VIN) plus Заглавие and Цена, which the
+// broker always sets by hand.
+const SOURCE_LOCKED_FIELDS = new Set([
+  'category', 'make', 'model', 'year', 'mileage', 'fuel', 'gearbox',
+  'condition', 'drivetrain', 'currency', 'description', 'final_description',
+  'location', 'seller_name', 'phone', 'ad_type', 'source_type',
+]);
+
+function isSourceImported(draft: MobileBgDraft): boolean {
+  return /^(?:encar|autotrader|autotrader_ca|script_json)$/i.test(String(draft.intake_origin || draft.source_type || ''))
+    || Boolean(draft.source_url);
+}
+
+function isFieldLocked(draft: MobileBgDraft, fields: MobileBgDraftField[], field: MobileBgFieldDef): boolean {
+  if (!isSourceImported(draft) || !SOURCE_LOCKED_FIELDS.has(field.key)) return false;
+  return Boolean(fields.find(row => row.field_key === field.key)?.value);
+}
+
 function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void }) {
   const [draft, setDraft] = useState<MobileBgDraft | null>(null);
   const [fields, setFields] = useState<MobileBgDraftField[]>([]);
@@ -957,6 +1074,11 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
     load();
   }, [draftId]);
 
+  async function reloadImages() {
+    const { data } = await supabase.from('mobile_bg_draft_images').select('*').eq('draft_id', draftId).order('display_order');
+    setImages((data || []) as MobileBgDraftImage[]);
+  }
+
   async function saveEditedFields() {
     setSavingFields(true);
     setSaveFieldsError(null);
@@ -967,6 +1089,10 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
         .concat(mobileBgVisibleFieldsBySection('publishing'))
         .concat(mobileBgVisibleFieldsBySection('source_control'))
         .filter((def, index, all) => all.findIndex(item => item.key === def.key) === index)
+        // Locked fields keep the value the extractor produced. Writing them back
+        // from the form would relabel extracted data as a manual edit and could
+        // push stale values over a fresh extraction.
+        .filter(def => !draft || !isFieldLocked(draft, fields, def))
         .map(def => ({
           draft_id: draftId,
           field_key: def.key,
@@ -986,7 +1112,10 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
         draft_id: draftId, action: 'DRAFT_FIELDS_MANUALLY_UPDATED', actor: 'Росен',
         details: { fields: rows.filter(row => row.value !== null).map(row => row.field_key) },
       });
-      setFields(rows as MobileBgDraftField[]);
+      setFields(current => {
+        const updated = new Map(rows.map(row => [row.field_key, row as unknown as MobileBgDraftField]));
+        return current.map(field => updated.get(field.field_key) || field);
+      });
       setDraft(current => current ? { ...current, updated_at: new Date().toISOString() } : current);
     } catch (error) {
       setSaveFieldsError(error instanceof Error ? error.message : 'Промените не бяха записани.');
@@ -1092,13 +1221,18 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
                 {definitions.map(def => {
                   const saved = fieldsByKey.get(def.key);
+                  const locked = isFieldLocked(draft, fields, def);
+                  const value = locked ? (saved?.value || '') : (editValues[def.key] ?? saved?.value ?? '');
                   return (
-                    <div key={def.key} className={`rounded border p-2 ${saved?.value ? 'border-slate-200' : def.required ? 'border-amber-200 bg-amber-50/40' : 'border-slate-200'}`}>
-                      <p className="text-[10px] font-bold text-slate-700">{def.key === 'final_description' ? 'Допълнителна информация' : def.mobile_bg_label}{def.required ? ' *' : ''}</p>
+                    <div key={def.key} className={`rounded border p-2 ${locked ? 'border-emerald-200 bg-emerald-50/40' : saved?.value ? 'border-slate-200' : def.required ? 'border-amber-200 bg-amber-50/40' : 'border-slate-200'}`}>
+                      <p className="text-[10px] font-bold text-slate-700">
+                        {def.key === 'final_description' ? 'Допълнителна информация' : def.mobile_bg_label}{def.required ? ' *' : ''}
+                        {locked && <span className="ml-1 font-normal text-emerald-700">🔒 заключено</span>}
+                      </p>
                       {def.field_type === 'textarea' || def.key === 'description' || def.key === 'final_description' ? (
-                        <textarea value={editValues[def.key] ?? saved?.value ?? ''} onChange={e => setEditValues(prev => ({ ...prev, [def.key]: e.target.value }))} rows={def.key === 'final_description' ? 7 : 3} className="mt-1 w-full rounded border border-slate-300 bg-white p-1.5 text-[11px] text-slate-800 outline-none focus:border-blue-500" placeholder="Въведи стойност..." />
+                        <textarea value={value} readOnly={locked} disabled={locked} onChange={e => setEditValues(prev => ({ ...prev, [def.key]: e.target.value }))} rows={def.key === 'final_description' ? 7 : 3} className={`mt-1 w-full rounded border border-slate-300 p-1.5 text-[11px] outline-none focus:border-blue-500 ${locked ? 'cursor-not-allowed bg-emerald-50 text-slate-600' : 'bg-white text-slate-800'}`} placeholder="Въведи стойност..." />
                       ) : (
-                        <input value={editValues[def.key] ?? saved?.value ?? ''} onChange={e => setEditValues(prev => ({ ...prev, [def.key]: e.target.value }))} className="mt-1 h-8 w-full rounded border border-slate-300 bg-white px-2 text-[11px] text-slate-800 outline-none focus:border-blue-500" placeholder="Въведи стойност..." />
+                        <input value={value} readOnly={locked} disabled={locked} onChange={e => setEditValues(prev => ({ ...prev, [def.key]: e.target.value }))} className={`mt-1 h-8 w-full rounded border border-slate-300 px-2 text-[11px] outline-none focus:border-blue-500 ${locked ? 'cursor-not-allowed bg-emerald-50 text-slate-600' : 'bg-white text-slate-800'}`} placeholder="Въведи стойност..." />
                       )}
                       <div className="mt-1 flex flex-wrap items-center gap-2 text-[9px] text-slate-400">
                         <span>Източник: {saved ? (SOURCE_LABELS_BG[saved.source] || saved.source) : (SOURCE_LABELS_BG[def.source] || def.source)}</span>
@@ -1113,6 +1247,17 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
           </div>
         );
       })}
+
+      {/* All photos the source exposed; the broker picks up to 17 for Mobile.bg */}
+      <div className="rounded-md border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-3 py-2">
+          <h3 className="text-sm font-bold text-slate-800">Снимки</h3>
+          <span className="text-[10px] text-slate-500">Маркирай до {MOBILE_BG_MAX_PHOTOS} снимки за публикуване · ще се качат в зададената подредба</span>
+        </div>
+        <div className="p-3">
+          <ImagesSection images={images} onUpdate={reloadImages} />
+        </div>
+      </div>
 
       {/* Complete Mobile.bg extras mirror */}
       <div className="rounded-md border border-slate-200 bg-white shadow-sm">

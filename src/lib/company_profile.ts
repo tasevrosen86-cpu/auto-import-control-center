@@ -29,6 +29,6 @@ export const ROYAL_CARS_PUBLISH_DEFAULTS = {
   description_language: 'Български',
 } as const;
 
-export function composeRoyalCarsDescription(_sourceDescription?: string) {
+export function composeRoyalCarsDescription() {
   return ROYAL_CARS_COMPANY_DESCRIPTION;
 }

@@ -50,6 +50,11 @@ const fieldMeta: Record<string, { label: string; dbKey: string; fieldType: strin
   description_auto: { label: 'Автоматично описание', dbKey: 'description_auto', fieldType: 'textarea' },
   description_manual: { label: 'Ръчно добавен текст', dbKey: 'description_manual', fieldType: 'textarea' },
   description_final: { label: 'Финално описание за Mobile.bg', dbKey: 'description_final', fieldType: 'textarea' },
+  title: { label: 'Заглавие', dbKey: 'title', fieldType: 'text' },
+  description: { label: 'Описание', dbKey: 'description', fieldType: 'textarea' },
+  final_description: { label: 'Финално описание за Mobile.bg', dbKey: 'final_description', fieldType: 'textarea' },
+  company_template: { label: 'Шаблон на фирмата', dbKey: 'company_template', fieldType: 'select' },
+  description_language: { label: 'Език на описанието', dbKey: 'description_language', fieldType: 'select' },
   location: { label: 'Населено място/област', dbKey: 'location', fieldType: 'text' },
   seller_name: { label: 'Име на продавача/фирмата', dbKey: 'seller_name', fieldType: 'text' },
   broker: { label: 'Брокер', dbKey: 'broker_name', fieldType: 'text' },
@@ -64,6 +69,9 @@ const fieldMeta: Record<string, { label: string; dbKey: string; fieldType: strin
   source_vin: { label: 'VIN от източника', dbKey: 'source_vin', fieldType: 'text' },
   source_price: { label: 'Цена на източника', dbKey: 'source_price_eur', fieldType: 'number' },
 };
+
+// Mobile.bg accepts at most 17 photos per listing.
+const MOBILE_BG_MAX_PHOTOS = 17;
 
 const requiredForReview = [
   'category', 'make', 'model', 'year', 'mileage', 'fuel', 'gearbox', 'color',
@@ -162,7 +170,10 @@ Deno.serve(async (request) => {
   if (!sourceUrl) return response({ error: 'JSON трябва да съдържа source.url.' }, 400);
   const missing = requiredForReview.filter(key => !byKey.get(key));
   const nextStatus = missing.length === 0 ? 'READY_FOR_REVIEW' : 'DRAFT';
-  const title = [byKey.get('make'), byKey.get('model'), byKey.get('year')].filter(Boolean).join(' ') || `Извлечена обява ${listingId || ''}`.trim();
+  const extractedTitle = byKey.get('title');
+  const title = extractedTitle
+    || [byKey.get('make'), byKey.get('model'), byKey.get('year')].filter(Boolean).join(' ')
+    || `Извлечена обява ${listingId || ''}`.trim();
 
   const requestedDraftId = asString(payload.draft_id);
   let draftId = requestedDraftId;
@@ -227,7 +238,10 @@ Deno.serve(async (request) => {
     const imageRows = images
       .map((image, index) => ({
         draft_id: draftId, source_url: asString(image.source_url || image.url), local_path: asString(image.local_path),
-        converted_jpg: image.converted_jpg === true, is_selected: image.selected !== false,
+        // Mobile.bg caps a listing at 17 photos. Every unique source photo is
+        // stored so the broker can swap picks, but only the first 17 start
+        // selected, otherwise the draft would not be publishable as imported.
+        converted_jpg: image.converted_jpg === true, is_selected: image.selected === true || (image.selected !== false && index < MOBILE_BG_MAX_PHOTOS),
         is_main: image.is_main === true || index === 0, display_order: Number(image.display_order ?? index + 1),
         real_car_photo_check: image.real_car_photo_check === true, processing_status: asString(image.processing_status) || 'pending',
         size_bytes: Number.isFinite(Number(image.size_bytes)) ? Number(image.size_bytes) : null,
