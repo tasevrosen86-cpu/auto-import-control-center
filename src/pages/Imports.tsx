@@ -962,6 +962,9 @@ function draftAutofillRows(draft: MobileBgDraft, loadedFields: MobileBgDraftFiel
     ad_type: ROYAL_CARS_PUBLISH_DEFAULTS.ad_type,
     source_type: sourceType,
     location: value('location') || sourceLocation,
+    // Mobile.bg refuses to publish without a production month. RoyalCarsBG
+    // always lists in April, so the broker never picks one by hand.
+    month: MOBILE_BG_DEFAULT_MONTH,
   };
   const sources: Record<string, string> = {
     title: 'agent',
@@ -972,6 +975,7 @@ function draftAutofillRows(draft: MobileBgDraft, loadedFields: MobileBgDraftFiel
     ad_type: 'broker',
     source_type: 'agent',
     location: 'agent',
+    month: 'manual',
   };
 
   const now = new Date().toISOString();
@@ -1000,10 +1004,12 @@ function draftAutofillRows(draft: MobileBgDraft, loadedFields: MobileBgDraftFiel
 // the optional fields Mobile.bg does not require (modification, power,
 // displacement, euro standard, colour, VIN) plus Заглавие and Цена, which the
 // broker always sets by hand.
+const MOBILE_BG_DEFAULT_MONTH = 'Април';
+
 const SOURCE_LOCKED_FIELDS = new Set([
   'category', 'make', 'model', 'year', 'mileage', 'fuel', 'gearbox',
   'condition', 'drivetrain', 'currency', 'description', 'final_description',
-  'location', 'seller_name', 'phone', 'ad_type', 'source_type',
+  'location', 'seller_name', 'phone', 'ad_type', 'source_type', 'month',
 ]);
 
 function isSourceImported(draft: MobileBgDraft): boolean {
@@ -1146,7 +1152,13 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
       });
       setFields(current => {
         const updated = new Map(rows.map(row => [row.field_key, row as unknown as MobileBgDraftField]));
-        return current.map(field => updated.get(field.field_key) || field);
+        const merged = current.map(field => updated.get(field.field_key) || field);
+        // A URL import does not produce a row for every field — price and month
+        // among them. Their rows are created by this save, so they must be
+        // appended here; mapping alone would hide the value until a reload.
+        const known = new Set(current.map(field => field.field_key));
+        const added = rows.filter(row => !known.has(row.field_key)) as unknown as MobileBgDraftField[];
+        return added.length ? [...merged, ...added] : merged;
       });
       setDraft(current => current ? { ...current, updated_at: new Date().toISOString() } : current);
     } catch (error) {
