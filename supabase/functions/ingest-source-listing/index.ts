@@ -70,6 +70,9 @@ const fieldMeta: Record<string, { label: string; dbKey: string; fieldType: strin
   source_price: { label: 'Цена на източника', dbKey: 'source_price_eur', fieldType: 'number' },
 };
 
+// Mobile.bg accepts at most 17 photos per listing.
+const MOBILE_BG_MAX_PHOTOS = 17;
+
 const requiredForReview = [
   'category', 'make', 'model', 'year', 'mileage', 'fuel', 'gearbox', 'color',
   'condition', 'drivetrain', 'price', 'currency', 'location', 'seller_name',
@@ -235,7 +238,10 @@ Deno.serve(async (request) => {
     const imageRows = images
       .map((image, index) => ({
         draft_id: draftId, source_url: asString(image.source_url || image.url), local_path: asString(image.local_path),
-        converted_jpg: image.converted_jpg === true, is_selected: image.selected !== false,
+        // Mobile.bg caps a listing at 17 photos. Every unique source photo is
+        // stored so the broker can swap picks, but only the first 17 start
+        // selected, otherwise the draft would not be publishable as imported.
+        converted_jpg: image.converted_jpg === true, is_selected: image.selected === true || (image.selected !== false && index < MOBILE_BG_MAX_PHOTOS),
         is_main: image.is_main === true || index === 0, display_order: Number(image.display_order ?? index + 1),
         real_car_photo_check: image.real_car_photo_check === true, processing_status: asString(image.processing_status) || 'pending',
         size_bytes: Number.isFinite(Number(image.size_bytes)) ? Number(image.size_bytes) : null,

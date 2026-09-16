@@ -42,9 +42,6 @@ function scalar(value: unknown): string | null {
   if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value).trim() || null;
   return null;
 }
-function arrayOfRecords(value: unknown): JsonRecord[] {
-  return Array.isArray(value) ? value.map(asRecord).filter(v => Object.keys(v).length > 0) : [];
-}
 function addJson(value: unknown, output: JsonRecord[]) {
   if (Array.isArray(value)) return value.forEach(item => addJson(item, output));
   const record = asRecord(value);
@@ -181,6 +178,10 @@ function isListingPhoto(url: string): boolean {
   return !JUNK_IMAGE.test(url);
 }
 
+// Mobile.bg accepts at most 17 photos per listing, but the draft keeps every
+// unique photo the source exposed so the broker can choose which 17 to publish.
+const MAX_DRAFT_PHOTOS = 60;
+
 function dedupeImages(images: Array<{ source_url: string; is_main: boolean; display_order: number }>) {
   const best = new Map<string, { source_url: string; is_main: boolean; display_order: number }>();
   for (const image of images) {
@@ -189,7 +190,7 @@ function dedupeImages(images: Array<{ source_url: string; is_main: boolean; disp
     const current = best.get(key);
     if (!current || pixelArea(image.source_url) > pixelArea(current.source_url)) best.set(key, image);
   }
-  return [...best.values()].slice(0, 40).map((image, index) => ({
+  return [...best.values()].slice(0, MAX_DRAFT_PHOTOS).map((image, index) => ({
     source_url: publishablePhotoUrl(image.source_url),
     is_main: index === 0,
     display_order: index + 1,
@@ -233,22 +234,22 @@ function detailValue(text: string, patterns: RegExp[]): string | null {
 function valuesFromDetailText(text: string) {
   return {
     mileage: detailValue(text, [
-      /(?:mileage|odometer|kilomet(?:er|re)s?|пробег)\s*[:\-]?\s*([0-9][0-9, .]*)\s*(?:km|км)?/i,
+      /(?:mileage|odometer|kilomet(?:er|re)s?|пробег)\s*[:-]?\s*([0-9][0-9, .]*)\s*(?:km|км)?/i,
     ]),
     gearbox: detailValue(text, [
-      /(?:transmission|gearbox|скоростна\s+кутия)\s*[:\-]?\s*([^\n|,;]+)/i,
+      /(?:transmission|gearbox|скоростна\s+кутия)\s*[:-]?\s*([^\n|,;]+)/i,
     ]),
     power: detailValue(text, [
-      /(?:horsepower|horse\s*power|power|мощност)\s*[:\-]?\s*([0-9][0-9 .]*)\s*(?:hp|kw|к\.?с\.?)?/i,
+      /(?:horsepower|horse\s*power|power|мощност)\s*[:-]?\s*([0-9][0-9 .]*)\s*(?:hp|kw|к\.?с\.?)?/i,
     ]),
     displacement: detailValue(text, [
-      /(?:engine\s*(?:size|displacement)|displacement|кубатура|работен\s+обем)\s*[:\-]?\s*([0-9][0-9 .]*)\s*(?:cc|cm3|l|литра)?/i,
+      /(?:engine\s*(?:size|displacement)|displacement|кубатура|работен\s+обем)\s*[:-]?\s*([0-9][0-9 .]*)\s*(?:cc|cm3|l|литра)?/i,
     ]),
     euro: detailValue(text, [
-      /(?:euro\s*(?:standard|class)?|екокатегория|евро\s*стандарт)\s*[:\-]?\s*(euro\s*[1-6][a-z]?|евро\s*[1-6][a-z]?)/i,
+      /(?:euro\s*(?:standard|class)?|екокатегория|евро\s*стандарт)\s*[:-]?\s*(euro\s*[1-6][a-z]?|евро\s*[1-6][a-z]?)/i,
     ]),
     color: detailValue(text, [
-      /(?:exterior\s+color|vehicle\s+color|color|цвят)\s*[:\-]?\s*([^\n|,;]+)/i,
+      /(?:exterior\s+color|vehicle\s+color|color|цвят)\s*[:-]?\s*([^\n|,;]+)/i,
     ]),
   };
 }

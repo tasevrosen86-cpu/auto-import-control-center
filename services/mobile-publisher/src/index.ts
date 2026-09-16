@@ -21,6 +21,8 @@ const db = createClient(process.env.SUPABASE_URL!, supabaseKey!, { auth: { persi
 const workerName = process.env.WORKER_NAME || `mobile-publisher-${process.pid}`;
 const profileDir = process.env.MOBILE_BG_USER_DATA_DIR!;
 const newListingUrl = process.env.MOBILE_BG_NEW_LISTING_URL || 'https://www.mobile.bg/pcgi/mobile.cgi?pubtype=1&act=6&subact=4&actions=1';
+// Mobile.bg rejects a listing with more than 17 photos.
+const MOBILE_BG_MAX_PHOTOS = 17;
 
 const FIELD_SELECTORS: Record<string, string> = {
   make: '[name="f5"]', model: '[name="f6"]', modification: '[name="f7"]', fuel: '[name="f8"]',
@@ -137,12 +139,15 @@ async function submitAndVerifyOnMobileBg(page: Page) {
 }
 
 async function uploadSelectedImages(page: Page, images: DraftImage[]) {
-  const selected = images.filter(image => image.is_selected).sort((a, b) => a.display_order - b.display_order);
+  const eligible = images.filter(image => image.is_selected).sort((a, b) => a.display_order - b.display_order);
+  const selected = eligible.slice(0, MOBILE_BG_MAX_PHOTOS);
   if (selected.length === 0) return { uploaded: 0, skipped: ['Няма избрани снимки.'] };
   const workDir = join(tmpdir(), 'aicc-mobile-bg-images');
   await mkdir(workDir, { recursive: true });
   const files: string[] = [];
-  const skipped: string[] = [];
+  const skipped: string[] = eligible.length > MOBILE_BG_MAX_PHOTOS
+    ? [`Mobile.bg приема до ${MOBILE_BG_MAX_PHOTOS} снимки; пропуснати ${eligible.length - MOBILE_BG_MAX_PHOTOS} от ${eligible.length} избрани.`]
+    : [];
   try {
     for (let index = 0; index < selected.length; index += 1) {
       const image = selected[index];
@@ -228,10 +233,32 @@ async function populateStepOne(page: Page, fields: DraftField[], extras: DraftEx
   return { filled, skipped };
 }
 
+// A published listing is only useful if the broker can get back to it later, so
+// the URL and the Mobile.bg ad id are written onto the draft itself. The draft
+// row feeds the "Публикувани обяви" section; the publish job result alone was
+// not enough because nothing surfaced it in the UI.
+async function recordPublishedListing(draftId: string, details: Record<string, unknown>) {
+  const url = typeof details.listing_url === 'string' ? details.listing_url : null;
+  const idFromUrl = url ? url.match(/[?&](?:adv|id)=(\d+)/i)?.[1] : null;
+  const adId = typeof details.listing_id === 'string' ? details.listing_id : idFromUrl;
+  await db.from('mobile_bg_drafts').update({
+    mobile_bg_url: url,
+    mobile_bg_listing_id: adId || null,
+    last_checked_at: url ? new Date().toISOString() : null,
+    updated_at: new Date().toISOString(),
+  }).eq('id', draftId);
+  const fieldRows = [
+    url ? { draft_id: draftId, field_key: 'mobile_bg_url', mobile_bg_label: 'Mobile.bg URL', our_db_key: 'mobile_bg_url', value: url, field_type: 'text', source: 'mobile_bg', updated_at: new Date().toISOString() } : null,
+    adId ? { draft_id: draftId, field_key: 'mobile_bg_id', mobile_bg_label: 'Mobile.bg ID на обявата', our_db_key: 'mobile_bg_id', value: adId, field_type: 'text', source: 'mobile_bg', updated_at: new Date().toISOString() } : null,
+  ].filter(Boolean) as Array<Record<string, unknown>>;
+  if (fieldRows.length) await db.from('mobile_bg_draft_fields').upsert(fieldRows, { onConflict: 'draft_id,field_key' });
+}
+
 async function finish(job: PublishJob, status: string, details: Record<string, unknown>, error?: string) {
   await db.from('mobile_bg_publish_jobs').update({ status, result: details, last_error: error || null, finished_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', job.id);
   const draftStatus = status === 'COMPLETED' ? 'PUBLISHED' : status === 'PREVIEW_READY' ? 'APPROVED' : status === 'NEEDS_LOGIN' ? 'PUBLISH_LOGIN_REQUIRED' : 'ERROR';
   await db.from('mobile_bg_drafts').update({ status: draftStatus, publish_error: error || null, published_at: status === 'COMPLETED' ? new Date().toISOString() : null, updated_at: new Date().toISOString() }).eq('id', job.draft_id);
+  if (status === 'COMPLETED') await recordPublishedListing(job.draft_id, details);
   await db.from('mobile_bg_draft_action_log').insert({ draft_id: job.draft_id, action: `MOBILE_PUBLISH_${status}`, actor: workerName, details });
 }
 
