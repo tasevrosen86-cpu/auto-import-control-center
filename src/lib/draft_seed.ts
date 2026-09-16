@@ -39,8 +39,10 @@ function firstRaw(raw: Record<string, unknown>, keys: string[]): string {
 }
 
 function normaliseEuro(value: string): string {
-  const match = value.match(/(?:euro|евро)\\s*([1-6][a-z]?)/i);
-  return match ? `Euro ${match[1].toLowerCase()}` : value;
+  const text = value.trim();
+  if (/^[1-6][a-z]?$/i.test(text)) return `Euro ${text.toLowerCase()}`;
+  const match = text.match(/(?:euro|евро)\s*([1-6][a-z]?)/i);
+  return match ? `Euro ${match[1].toLowerCase()}` : text;
 }
 
 function imageSeed(raw: Record<string, unknown>) {
@@ -73,12 +75,12 @@ function detailFallback(raw: Record<string, unknown>) {
   const text = JSON.stringify(raw);
   const pick = (patterns: RegExp[]) => patterns.map(pattern => text.match(pattern)?.[1]?.trim()).find(Boolean) || '';
   return {
-    mileage: pick([/(?:mileage|odometer|пробег)[^0-9]{0,20}([0-9][0-9, .]*)/i]),
-    gearbox: pick([/(?:transmission|gearbox|скоростна кутия)[^:"]{0,10}[:"]\\s*([^,"}]+)/i]),
+    mileage: pick([/(?:mileage|odometer|пробег)[a-z_]*"?\s*:\s*"?([0-9][0-9, .]*)/i]),
+    gearbox: pick([/(?:transmission|gearbox|скоростна кутия)[^:"]{0,10}[:"]\s*([^,"}]+)/i]),
     power: pick([/(?:horsepower|power|мощност)[^0-9]{0,20}([0-9][0-9 .]*)/i]),
     displacement: pick([/(?:displacement|engineDisplacement|кубатура|работен обем)[^0-9]{0,20}([0-9][0-9 .]*)/i]),
-    euro: pick([/(?:euroStandard|euro_standard|emissionClass|екокатегория)[^:"]{0,10}[:"]\\s*([^,"}]+)/i]),
-    color: pick([/(?:color|vehicleColor|exteriorColor|цвят)[^:"]{0,10}[:"]\\s*([^,"}]+)/i]),
+    euro: pick([/(?:euroStandard|euro_standard|emissionClass|екокатегория)[^:"]{0,10}[:"]\s*([^,"}]+)/i]),
+    color: pick([/(?:color|vehicleColor|exteriorColor|цвят)[^:"]{0,10}[:"]\s*([^,"}]+)/i]),
   };
 }
 

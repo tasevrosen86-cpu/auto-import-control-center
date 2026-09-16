@@ -89,6 +89,24 @@ function vehicleRecord(documents: JsonRecord[]): JsonRecord {
   }));
   return candidates.sort((a, b) => b.score - a.score)[0]?.record || documents[0] || {};
 }
+// AutoTrader renders structured listing data under props.pageProps.listingDetails
+// rather than in the JSON-LD block that vehicleRecord() selects. That block is
+// the only place modelYear, fuelCategory and mileageInKmRaw appear, so walk the
+// whole page for the object carrying those keys.
+const AUTOTRADER_DETAIL_KEYS = [
+  'mileageInKmRaw', 'fuelCategory', 'modelYear', 'modelVersionInput',
+  'transmissionType', 'bodyColor', 'numberOfSeats', 'bodyType',
+];
+
+function autotraderVehicle(documents: JsonRecord[]): JsonRecord {
+  let best: JsonRecord = {};
+  let bestScore = 0;
+  documents.forEach(document => walk(document, record => {
+    const score = AUTOTRADER_DETAIL_KEYS.filter(key => key in record).length;
+    if (score > bestScore) { bestScore = score; best = record; }
+  }));
+  return best;
+}
 function firstValue(root: unknown, keys: string[]): string | null {
   const wanted = new Set(keys.map(key => key.toLowerCase()));
   let found: string | null = null;
@@ -121,22 +139,22 @@ function detailValue(text: string, patterns: RegExp[]): string | null {
 function valuesFromDetailText(text: string) {
   return {
     mileage: detailValue(text, [
-      /(?:mileage|odometer|kilomet(?:er|re)s?|пробег)\\s*[:\\-]?\\s*([0-9][0-9, .]*)\\s*(?:km|км)?/i,
+      /(?:mileage|odometer|kilomet(?:er|re)s?|пробег)\s*[:\-]?\s*([0-9][0-9, .]*)\s*(?:km|км)?/i,
     ]),
     gearbox: detailValue(text, [
-      /(?:transmission|gearbox|скоростна\\s+кутия)\\s*[:\\-]?\\s*([^\\n|,;]+)/i,
+      /(?:transmission|gearbox|скоростна\s+кутия)\s*[:\-]?\s*([^\n|,;]+)/i,
     ]),
     power: detailValue(text, [
-      /(?:horsepower|horse\\s*power|power|мощност)\\s*[:\\-]?\\s*([0-9][0-9 .]*)\\s*(?:hp|kw|к\\.?с\\.?)?/i,
+      /(?:horsepower|horse\s*power|power|мощност)\s*[:\-]?\s*([0-9][0-9 .]*)\s*(?:hp|kw|к\.?с\.?)?/i,
     ]),
     displacement: detailValue(text, [
-      /(?:engine\\s*(?:size|displacement)|displacement|кубатура|работен\\s+обем)\\s*[:\\-]?\\s*([0-9][0-9 .]*)\\s*(?:cc|cm3|l|литра)?/i,
+      /(?:engine\s*(?:size|displacement)|displacement|кубатура|работен\s+обем)\s*[:\-]?\s*([0-9][0-9 .]*)\s*(?:cc|cm3|l|литра)?/i,
     ]),
     euro: detailValue(text, [
-      /(?:euro\\s*(?:standard|class)?|екокатегория|евро\\s*стандарт)\\s*[:\\-]?\\s*(euro\\s*[1-6][a-z]?|евро\\s*[1-6][a-z]?)/i,
+      /(?:euro\s*(?:standard|class)?|екокатегория|евро\s*стандарт)\s*[:\-]?\s*(euro\s*[1-6][a-z]?|евро\s*[1-6][a-z]?)/i,
     ]),
     color: detailValue(text, [
-      /(?:exterior\\s+color|vehicle\\s+color|color|цвят)\\s*[:\\-]?\\s*([^\\n|,;]+)/i,
+      /(?:exterior\s+color|vehicle\s+color|color|цвят)\s*[:\-]?\s*([^\n|,;]+)/i,
     ]),
   };
 }
@@ -162,7 +180,7 @@ function normalizeCondition(value: string | null): string | null {
 }
 function normalizeEuro(value: string | null): string | null {
   if (!value) return null;
-  const match = value.match(/(?:euro|евро)\\s*([1-6][a-z]?)/i);
+  const match = value.match(/(?:euro|евро)\s*([1-6][a-z]?)/i);
   return match ? `Euro ${match[1].toLowerCase()}` : value;
 }
 function normalizeColor(value: string | null): string | null {
@@ -227,16 +245,19 @@ function extrasFrom(root: JsonRecord): string[] {
 function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string, detail: ReturnType<typeof valuesFromDetailText> = valuesFromDetailText(''), domImageUrls: string[] = []) {
   const vehicle = vehicleRecord(documents);
   const source = job.source_type;
+  const autoDetail = source === 'autotrader_ca' ? autotraderVehicle(documents) : {};
   const brand = nested(vehicle, 'brand', ['name']) || firstValue(vehicle, ['make', 'manufacturer']);
   const model = firstValue(vehicle, ['model', 'modelName']);
-  const year = firstValue(vehicle, ['vehicleModelDate', 'modelYear', 'year']);
+  const year = firstValue(vehicle, ['vehicleModelDate', 'modelYear', 'year']) ||
+    scalar(autoDetail.modelYear);
   const mileage = numberText(
     detail.mileage ||
     nested(vehicle, 'mileageFromOdometer', ['value']) ||
+    scalar(autoDetail.mileageInKmRaw) ||
     firstValue(vehicle, ['mileage', 'odometer']) ||
-    pageTitle.match(/([\\d, .]+)\\s*km\\b/i)?.[1] || null,
+    pageTitle.match(/([0-9][0-9, .]*)\s*km\b/i)?.[1] || null,
   );
-  const fuel = normalizeFuel(firstValue(vehicle, ['fuelType', 'fuel']));
+  const fuel = normalizeFuel(scalar(asRecord(autoDetail.fuelCategory).formatted) || firstValue(vehicle, ['fuelType', 'fuel']));
   const gearbox = normalizeGearbox(detail.gearbox || firstValue(vehicle, ['vehicleTransmission', 'transmission', 'gearbox']));
   const power = numberText(detail.power || nested(vehicle, 'vehicleEngine', ['enginePower', 'power']) || firstValue(vehicle, ['horsepower', 'powerHp', 'enginePower']));
   const displacement = numberText(detail.displacement || nested(vehicle, 'vehicleEngine', ['engineDisplacement', 'displacement']) || firstValue(vehicle, ['engineDisplacement', 'displacement']));
@@ -293,7 +314,7 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string,
     },
     fields,
     extras: extrasFrom(vehicle),
-    images: [...imagesFrom(documents), ...domImageUrls.filter(url => /^https?:\\/\\//i.test(url)).slice(0, 40).map((source_url, index) => ({ source_url, is_main: index === 0, display_order: index + 1 }))],
+    images: [...imagesFrom(documents), ...domImageUrls.filter(url => /^https?:\/\//i.test(url)).slice(0, 40).map((source_url, index) => ({ source_url, is_main: index === 0, display_order: index + 1 }))],
     raw_json: documents,
   };
 }
