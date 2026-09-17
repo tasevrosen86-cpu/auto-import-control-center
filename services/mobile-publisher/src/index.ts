@@ -3,6 +3,7 @@ import { chromium, type Page } from 'playwright';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 type PublishJob = { id: string; draft_id: string; mode: 'PREVIEW' | 'LIVE' };
 type DraftField = { field_key: string; value: string | null };
@@ -29,8 +30,28 @@ const FIELD_SELECTORS: Record<string, string> = {
   condition: '[name="f25"]', power: '[name="f9"]', euro_standard: '[name="f29"]', gearbox: '[name="f10"]',
   displacement: '[name="f30"]', price: '[name="f12"]', currency: '[name="f13"]', vat_included: '[name="f31"]',
   mileage: '[name="f16"]', month: '[name="f14"]', year: '[name="f15"]',
-  color: '[name="f17"]', location: '[name="f18"]', vin: '[name="f32"]',
+  color: '[name="f17"]', location: '[name="f18"]', country: '[name="f19"]', vin: '[name="f32"]',
 };
+
+// Mobile.bg splits the origin in two: f18 is the market area and f19 is the
+// country. The draft keeps them joined as "Извън страната → Канада", which never
+// matched the f18 option list, so the area was dropped and the country was never
+// set at all. Both are derived from the joined value.
+const LOCATION_ALIASES: Record<string, string> = {
+  'Извън страната → Канада': 'Извън страната',
+  'Извън страната → Южна Корея': 'Извън страната',
+};
+const COUNTRY_CANDIDATES: Array<[string, string[]]> = [
+  ['Канада', ['Канада']],
+  ['Южна Корея', ['Южна Корея', 'Корея', 'Южна Корея (Република Корея)']],
+];
+
+// Fields that must land in Mobile.bg for the listing to be worth publishing.
+// Everything else — colour, modification, extras, the Canada-only additions and
+// the VIN — stays optional and is reported without blocking.
+const STRICT_FIELDS = (process.env.MOBILE_BG_STRICT_FIELDS
+  || 'title,make,model,price,currency,condition,fuel,gearbox,year,mileage,location,country')
+  .split(',').map(key => key.trim()).filter(Boolean);
 const VALUE_ALIASES: Record<string, Record<string, string>> = {
   fuel: { Бензин: 'Бензинов', Дизел: 'Дизелов', Хибрид: 'Хибриден', 'Газ (LPG)': 'Газ' },
   condition: { Използван: 'Употребяван' },
@@ -221,21 +242,55 @@ async function findTitleControl(page: Page) {
   return null;
 }
 
+// Option lists in Mobile.bg arrive after the field they depend on is chosen:
+// the model list follows the make, and the area/country lists follow the body
+// and the location. A fixed sleep lost that race and every dependent select was
+// reported as "no matching option", leaving the form half-empty while the run
+// looked successful. Wait for the list to actually fill instead.
+async function waitForOptions(page: Page, selector: string, minimum = 2, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const count = await page.locator(`${selector} option`).count().catch(() => 0);
+    if (count >= minimum) return true;
+    await page.waitForTimeout(250);
+  }
+  return false;
+}
+
 async function populateStepOne(page: Page, fields: DraftField[], extras: DraftExtra[]) {
   const values = new Map(fields.map(field => [field.field_key, String(field.value || '').trim()]));
   const filled: string[] = [];
   const skipped: Array<{ key: string; value: string; reason: string }> = [];
   for (const [key, selector] of Object.entries(FIELD_SELECTORS)) {
     let value = values.get(key) || '';
+    // The origin arrives joined ("Извън страната → Канада"); f18 takes the area
+    // and f19 the country, so each is resolved separately. The country is
+    // derived here, before the emptiness check, because the draft has no
+    // country field of its own to carry it.
+    if (key === 'location') {
+      value = LOCATION_ALIASES[value] || value;
+    } else if (key === 'country') {
+      const joined = values.get('location') || '';
+      const match = COUNTRY_CANDIDATES.find(([, names]) => names.some(name => joined.includes(name)));
+      value = match ? match[0] : '';
+    }
     if (!value) continue;
     value = VALUE_ALIASES[key]?.[value] || value;
     const control = page.locator(selector).first();
     if (!await control.count()) { skipped.push({ key, value, reason: 'Полето липсва в Mobile.bg.' }); continue; }
     const tag = await control.evaluate(element => element.tagName);
-    const ok = tag === 'SELECT' ? await selectText(page, selector, value) : await control.fill(value).then(() => true);
-    if (!ok) { skipped.push({ key, value, reason: 'Няма съвпадаща опция.' }); continue; }
+    if (tag === 'SELECT') {
+      // The list may still be loading, so give it the chance to arrive first.
+      if (!await waitForOptions(page, selector)) {
+        skipped.push({ key, value, reason: 'Списъкът с опции не се зареди навреме.' });
+        continue;
+      }
+      if (!await selectText(page, selector, value)) { skipped.push({ key, value, reason: 'Няма съвпадаща опция.' }); continue; }
+    } else if (!await control.fill(value).then(() => true).catch(() => false)) {
+      skipped.push({ key, value, reason: 'Стойността не беше приета.' }); continue;
+    }
     filled.push(key);
-    if (key === 'make' || key === 'location') await page.waitForTimeout(500);
+    if (key === 'make' || key === 'location' || key === 'country') await page.waitForTimeout(500);
   }
   const derived = [
     values.get('drivetrain') === '4x4' ? '4x4' : '',
@@ -271,8 +326,23 @@ async function populateStepOne(page: Page, fields: DraftField[], extras: DraftEx
     if (titleControl) { await titleControl.fill(title); filled.push('title'); }
     else skipped.push({ key: 'title', value: title, reason: 'Полето „Заглавие“ не беше намерено във формата.' });
   }
+  // A run that quietly drops a required field produces a half-empty listing that
+  // still reports success. Stop instead, and name the fields that did not land.
+  const missingRequired = skipped
+    .map(entry => entry.key.replace(/^extra:/, ''))
+    .filter(key => STRICT_FIELDS.includes(key));
+  if (missingRequired.length > 0) {
+    const detail = skipped.filter(entry => STRICT_FIELDS.includes(entry.key.replace(/^extra:/, '')))
+      .map(entry => `${entry.key}=${entry.value} (${entry.reason})`).join('; ');
+    return { filled, skipped, blockedBy: missingRequired, blockReason: `Задължителни полета не влязоха в Mobile.bg: ${detail}` };
+  }
   return { filled, skipped };
 }
+
+// The form filling is exercised against a stub of the Mobile.bg form, because
+// its behaviour — option lists arriving after the field they depend on, and the
+// origin split across two controls — is what broke publishing.
+export { populateStepOne as populateStepOneForTest };
 
 // A published listing is only useful if the broker can get back to it later, so
 // the URL and the Mobile.bg ad id are written onto the draft itself. The draft
@@ -435,6 +505,9 @@ async function run() {
     await noteStage(job, page, 'Влизането е успешно. Попълвам полетата.');
     const result = await populateStepOne(page, fieldResult.data || [], extraResult.data || []);
     await noteStage(job, page, `Полетата са попълнени. Пропуснати: ${result.skipped.length}.`);
+    if (result.blockedBy?.length) {
+      return await finish(job, 'NEEDS_CONFIGURATION', { ...result, url: page.url(), login_state: loginState }, result.blockReason || 'Задължителни полета не влязоха в Mobile.bg.');
+    }
     // The per-field outcome is published while the run continues, so the screen
     // can show which values landed and which were left out before the end.
     liveDetails = { filled: result.filled, skipped: result.skipped };
@@ -472,4 +545,9 @@ async function run() {
   }
 }
 
-run().catch(error => { console.error(error); process.exitCode = 1; });
+// Only run when started as the entry point. Importing this module must not
+// start claiming jobs from the queue as a side effect.
+const isEntryPoint = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isEntryPoint) {
+  run().catch(error => { console.error(error); process.exitCode = 1; });
+}

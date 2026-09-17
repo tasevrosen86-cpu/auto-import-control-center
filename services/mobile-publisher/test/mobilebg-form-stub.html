@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="bg">
+<head><meta charset="utf-8"><title>Mobile.bg опростено копие за тест</title></head>
+<body>
+<h1>Нова обява, стъпка 1</h1>
+<form name="pub" id="pub" method="post" action="#">
+  <label for="title">Заглавие</label>
+  <input id="title" name="title" type="text">
+
+  <label>Марка <select name="f5">
+    <option value="">-</option>
+    <option>Dodge</option><option>Volkswagen</option><option>Toyota</option>
+    <option>Kia</option><option>Mercedes-Benz</option>
+  </select></label>
+
+  <!-- The model list is empty until a make is chosen, exactly like the real
+       form: the earlier code read it immediately and found nothing. -->
+  <label>Модел <select name="f6"><option value="">-</option></select></label>
+
+  <label>Гориво <select name="f8"><option value="">-</option><option>Бензинов</option><option>Дизелов</option><option>Хибриден</option></select></label>
+  <label>Състояние <select name="f25"><option value="">-</option><option>Употребяван</option><option>Нов</option></select></label>
+  <label>Мощност <input name="f9"></label>
+  <label>Цена <input name="f12"></label>
+  <label>Валута <select name="f13"><option value="">-</option><option>EUR</option><option>BGN</option></select></label>
+  <label>Скорости <select name="f10"><option value="">-</option><option>Автоматична</option><option>Ръчна</option></select></label>
+  <label>ДДС <select name="f31"><option value="">-</option><option>Цената е с включено ДДС</option><option>Цената е без ДДС</option></select></label>
+  <label>Пробег <input name="f16"></label>
+  <label>Месец <select name="f14"><option value="">-</option><option>януари</option><option>април</option></select></label>
+  <label>Година <select name="f15"><option value="">-</option><option>2020</option><option>2023</option></select></label>
+
+  <!-- Colour and VIN are present but must stay optional. The stub offers no
+       "Червен" so a missing colour can be observed without blocking. -->
+  <label>Цвят <select name="f17"><option value="">-</option><option>Черен</option></select></label>
+  <label>Място <select name="f18"><option value="">-</option><option>Извън страната</option><option>Варна</option></select></label>
+  <label>VIN <input name="f32"></label>
+
+  <label>Описание <textarea name="f21"></textarea></label>
+
+  <input type="hidden" name="actions" value="1">
+  <input type="submit" value="ПРОДЪЛЖИ">
+</form>
+
+<script>
+// The list arrives after the field it depends on is chosen, mirroring the real
+// site. Waiting for it is what the old fixed sleep failed to do.
+const models = {
+  Dodge: ['RAM 1500', 'Challenger'],
+  Volkswagen: ['VW Tiguan', 'Passat'],
+  Toyota: ['Rav4', 'Camry'],
+  Kia: ['Sorento', 'Sportage'],
+  'Mercedes-Benz': ['GLE', 'C 200'],
+};
+const countries = {
+  'Извън страната': ['Канада', 'Южна Корея', 'САЩ'],
+  'Варна': ['България'],
+};
+const form = document.forms.namedItem('pub');
+form.elements.f5.addEventListener('change', (event) => {
+  const list = form.elements.f6;
+  list.innerHTML = '<option value="">-</option>';
+  setTimeout(() => {
+    for (const model of models[event.target.value] || []) {
+      const option = document.createElement('option');
+      option.textContent = model;
+      list.appendChild(option);
+    }
+  }, 1200);
+});
+form.elements.f18.addEventListener('change', (event) => {
+  let list = form.elements.f19;
+  if (!list) {
+    list = document.createElement('select');
+    list.name = 'f19';
+    form.appendChild(list);
+  }
+  list.innerHTML = '<option value="">-</option>';
+  setTimeout(() => {
+    for (const country of countries[event.target.value] || []) {
+      const option = document.createElement('option');
+      option.textContent = country;
+      list.appendChild(option);
+    }
+  }, 1200);
+});
+</script>
+</body>
+</html>

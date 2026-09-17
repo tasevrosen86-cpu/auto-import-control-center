@@ -101,13 +101,16 @@ export function createDraftSeed(vehicle: Vehicle, marketplaces: VehicleMarketpla
   const salePrice = vehicle.our_price_eur ?? source?.final_eur ?? null;
   const sourceUrl = source?.listing_url || null;
   const detail = detailFallback(raw);
+  // "Заглавие" must carry the original listing title when the source supplied
+  // one; only fall back to make/model/year when it did not.
+  const sourceTitle = firstRaw(raw, ['title', 'listing_title', 'ad_title', 'offer_title', 'offerTitle']);
   const fields: Record<string, string> = {
     category: 'Автомобили и джипове',
-    title: `${vehicle.make} ${vehicle.model} ${vehicle.model_year}`,
+    title: sourceTitle || `${vehicle.make} ${vehicle.model} ${vehicle.model_year}`,
     make: vehicle.make,
     model: vehicle.model,
     year: asText(vehicle.model_year),
-    month: source?.marketplace === 'canada' ? 'Декември' : asText(raw.production_month || raw.month),
+    month: source?.marketplace === 'canada' ? 'Април' : asText(raw.production_month || raw.month),
     mileage: asText(source?.mileage_km ?? raw.mileage_km) || detail.mileage,
     fuel: vehicle.fuel,
     gearbox: firstRaw(raw, ['gearbox', 'transmission', 'vehicleTransmission']) || detail.gearbox,
