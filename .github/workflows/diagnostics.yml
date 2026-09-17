@@ -96,4 +96,21 @@ jobs:
           echo "############ ИМА ЛИ ВЪОБЩЕ НЯКАКВА ЧЕРНОВА ############"
           echo "(броят се вижда само ако работникът има право на четене)"
           sudo journalctl -u aicc-mobile-publisher.service --since "24 hours ago" --no-pager 2>&1 | grep -icE "42501|permission denied|Не мога|грешка" | sed 's/^/грешки за 24 часа: /'
+          echo
+
+          echo "############ КАКВО ВРЪЩА MOBILE.BG НА СЪРВЪРА ############"
+          echo "(същата заявка, която работникът прави — само се гледа, нищо не се публикува)"
+          URL='https://www.mobile.bg/pcgi/mobile.cgi?pubtype=1&act=6&subact=4&actions=1'
+          BODY=$(curl -s -A 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36' -H 'Accept-Language: bg-BG,bg;q=0.9' -w '\n@@HTTP:%{http_code}@@SIZE:%{size_download}' "$URL" 2>&1)
+          echo "$BODY" | grep -o '@@HTTP:[0-9]*@@SIZE:[0-9]*' | sed 's/@@/ /g' | sed 's/^/  отговор:/'
+          echo "  полетата на формата:"
+          for N in f5 f6 f12 f18 f19; do
+            printf "    name=\"%s\": " "$N"
+            echo "$BODY" | grep -c "name=\"$N\""
+          done
+          echo "  видим текст:"
+          echo "$BODY" | sed -e 's/<[^>]*>/ /g' -e 's/&#39;/'"'"'/g' | tr -s ' \n' ' ' | cut -c1-300 | sed 's/^/    /'
+          echo
+          echo "  има ли защита:"
+          echo "$BODY" | grep -oiE "cloudflare|ddos-guard|captcha|recaptcha|turnstile|technical|технически затруднения|robot" | sort | uniq -c | sed 's/^/    /'
           REMOTE
