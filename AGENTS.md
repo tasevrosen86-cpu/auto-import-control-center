@@ -1,5 +1,71 @@
 # Auto Import Control Center
 
+> ## Where we are right now (read this first)
+>
+> **The task in progress.** Build a second, independent Mobile.bg publishing path
+> in a new main-menu section called **«Публикации»**. It must not touch the
+> existing «Обяви» section in any way — that flow stays frozen as a fallback.
+>
+> **Why a second path.** The old publisher never reaches the form. Mobile.bg sits
+> behind Cloudflare and answers the worker with a `403` interstitial that carries
+> zero form controls, which is why every `NEEDS_CONFIGURATION` row lists all
+> twenty fields as missing. The measured block appears in three independent
+> places: the old worker, a locally launched Playwright browser, and a plain
+> Browser Use browsing session. All three get the same page. The fields were
+> never the problem.
+>
+> **The chosen fix.** Do not launch a browser locally. Create a real remote
+> Chromium through the **Browser Use infrastructure API** (no Browser Use AI
+> Agent) and attach to it with `chromium.connectOverCDP(cdpUrl)`:
+>
+> ```
+> POST https://api.browser-use.com/api/v4/browsers
+>   X-Browser-Use-API-Key: $BROWSER_USE_API_KEY
+> → { id, cdpUrl, liveUrl }
+> ```
+>
+> The endpoint and the header name were verified against the live service: a
+> request without a key returns `401` naming the header and the `bu_` key prefix.
+>
+> **What is already done and committed on `main`.** The publisher module
+> (`services/publications-publisher/`), the «Публикации» screen
+> (`src/pages/Publications.tsx`), the new `publication_*` tables and the
+> `publications-browser-test` workflow. Typecheck, build and the module syntax
+> checks all pass. Old publisher: **zero line difference** — verify with
+> `git diff --stat HEAD~3 HEAD -- services/mobile-publisher`.
+>
+> **What is blocked and why.** `BROWSER_USE_API_KEY` is registered correctly in
+> OpenHands Cloud (confirm with
+> `curl -H "Authorization: Bearer $OPENHANDS_API_KEY" -H "Accept: application/json" "https://app.all-hands.dev/api/v1/secrets/search"`),
+> but a sandbox only receives secrets **at startup**. A conversation whose
+> sandbox started before the key was added sees an empty registry
+> (`/api/settings/secrets` → `{"secrets":[]}`) and no environment variable, and
+> cannot fix that by restarting. **Start a new conversation** so the key is
+> injected; then the work continues from here.
+>
+> **The very next action.** From a sandbox that has the key:
+>
+> ```bash
+> cd services/publications-publisher && npm install
+> node src/index.mjs browser-test
+> ```
+>
+> It must print `SUCCESS` (the form and its controls are really present) or
+> `browser_blocked` (with the markers and page text that justify it). **Do not
+> enable a real publish before it reports `SUCCESS`.** The live view URL is
+> printed so the session can be watched by a person.
+>
+> **Then, in order.** (1) Confirm `SUCCESS`. (2) Apply
+> `supabase/migrations/20260917180000_publications_section.sql` — written but not
+> applied, and nothing in Supabase has been touched. (3) Add the screen that
+> picks a car from the catalogue and fills `payload`; today a queued job is empty
+> and only `prepare` is exercised. (4) Only then consider the real publish.
+>
+> **Do not.** Touch `services/mobile-publisher`, the `mobile_bg_*` tables, the
+> existing selectors, the draft logic or any working function. Do not switch
+> Supabase. Do not launch a local browser for mobile.bg. Do not put a key in the
+> frontend or in this repository.
+
 ## What this is
 
 React + Vite + TypeScript front-end for a car-import broker, backed by Supabase.
