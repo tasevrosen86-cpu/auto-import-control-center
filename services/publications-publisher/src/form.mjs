@@ -58,7 +58,26 @@ async function waitForOptions(session, name, minimum = 2, attempts = 40) {
 export async function openForm(session) {
   await session.send('Page.navigate', { url: FORM_URL });
   await sleep(7000);
+  // The wizard lives inside frames on this site, so give them time to settle
+  // before deciding the page is not the form.
+  await waitForFormInAnyFrame(session, 20);
   await sleep(500);
+}
+
+// The form is not always in the top document: mobile.bg serves its publisher
+// inside frames, so a lookup limited to the main frame reports "no form" on a
+// page that is actually showing the form. This walks every frame.
+async function waitForFormInAnyFrame(session, attempts) {
+  if (!session.page) return false;
+  for (let i = 0; i < attempts; i += 1) {
+    for (const frame of session.page.frames()) {
+      try {
+        if (await frame.evaluate(() => Boolean(document.forms.namedItem('pub')))) return true;
+      } catch { /* a frame can be detached mid-walk */ }
+    }
+    await sleep(500);
+  }
+  return false;
 }
 
 // The form is only really there if it carries its own controls. Reading this
@@ -69,6 +88,31 @@ export async function openForm(session) {
 // interstitial are named in the reason so a block is never misread as a
 // mapping problem.
 export async function inspectForm(session) {
+  // Frames first: the form is inside one, and reading only the top document is
+  // what made a real Mobile.bg page look like a block page.
+  if (session.page) {
+    for (const frame of session.page.frames()) {
+      try {
+        const inFrame = await frame.evaluate(`(() => {
+          const form = document.forms.namedItem("pub")
+          if (!form) return null
+          const names = [...form.elements].map((e) => e.name).filter(Boolean)
+          return { url: location.href, title: document.title, form_found: true, frame: true, control_count: names.length, controls: names.slice(0, 40), has_make: names.includes("f5"), has_file_input: document.querySelectorAll('input[type="file"]').length > 0 }
+        })()`);
+        if (inFrame?.form_found) {
+          const verdict = inFrame.control_count > 0 && inFrame.has_make ? 'SUCCESS' : 'browser_blocked';
+          return {
+            ...inFrame,
+            verdict,
+            reason: verdict === 'SUCCESS'
+              ? 'Формата на Mobile.bg е реална: document.forms.namedItem("pub") съществува с полетата си, във фрейм.'
+              : `Формата е намерена, но с ${inFrame.control_count} полета${inFrame.has_make ? '' : ' и без марката'}.`,
+          };
+        }
+      } catch { /* a frame can be detached mid-walk */ }
+    }
+  }
+
   const seen = await evaluate(session, `(() => {
     const form = document.forms.namedItem("pub")
     const names = form ? [...form.elements].map((e) => e.name).filter(Boolean) : []
@@ -83,16 +127,22 @@ export async function inspectForm(session) {
       has_make: names.includes("f5"),
       has_file_input: document.querySelectorAll('input[type="file"]').length > 0,
       body_text: text.slice(0, 400),
+      frame_count: document.querySelectorAll('iframe, frame').length,
       markers: ['just a moment', 'cf-challenge', 'cf_chl_', 'checking your browser', 'attention required', 'cloudflare', 'технически затруднения', 'достъпът е ограничен', 'access denied']
         .filter((marker) => html.includes(marker) || text.toLowerCase().includes(marker)),
     }
   })()`);
 
   const verdict = seen.form_found && seen.control_count > 0 && seen.has_make ? 'SUCCESS' : 'browser_blocked';
+  // A real page with no form is a different problem from a block page, and
+  // saying which one it is stops the next person chasing the wrong cause.
+  const reached = seen.markers.length === 0 && /ДОБАВИ ОБЯВА|Моите обяви|Въвеждане на описанието/i.test(seen.body_text);
   const reason = verdict === 'SUCCESS'
     ? 'Формата на Mobile.bg е реална: document.forms.namedItem("pub") съществува с полетата си.'
-    : `Формата не се появи: ${seen.control_count} полета.${seen.markers.length ? ` Маркери на блокировка: ${seen.markers.join(', ')}.` : ''} Страницата върна: ${seen.body_text.slice(0, 200) || 'нищо'}`;
-  return { ...seen, verdict, reason };
+    : reached
+      ? `Страницата на Mobile.bg се зареди (блокада няма), но формата не е налична: ${seen.control_count} полета, ${seen.frame_count} фрейма. Това е различен проблем от блокировка.`
+      : `Формата не се появи: ${seen.control_count} полета.${seen.markers.length ? ` Маркери на блокировка: ${seen.markers.join(', ')}.` : ''} Страницата върна: ${seen.body_text.slice(0, 200) || 'нищо'}`;
+  return { ...seen, reached, verdict, reason };
 }
 
 // Phone and description are required by Mobile.bg but are constant for us, so
