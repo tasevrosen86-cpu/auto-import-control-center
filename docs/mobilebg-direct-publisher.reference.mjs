@@ -187,7 +187,7 @@ export async function publishOne(session, item) {
     await session.DOM.setFileInputFiles({ nodeId: input.nodeId, files: paths })
     let attached = 0
     for (let i = 0; i < 180; i++) {
-      attached = Number(await evaluate(session, 'document.querySelectorAll("li.hasPhoto .photo[style*=background-image]").length')) || 0
+      attached = Number(await evaluate(session, 'document.querySelectorAll("li.hasPhoto .photo[style*=\"background-image\"]").length')) || 0
       const processing = Number(await evaluate(session, 'document.querySelectorAll("li.hasPhoto .processing").length')) || 0
       if (attached >= paths.length && processing === 0) break
       await sleep(500)

@@ -256,4 +256,65 @@ the stub — and no mapping change can conjure a form out of a 403 page.
 `finish` writes `NEEDS_CONFIGURATION` rather than `QUEUED`, and `claim` only
 picks up `QUEUED`, so a job does **not** retry in a loop. Keep it that way while
 the challenge is unresolved: an automatic retry against a Cloudflare challenge
-escalates the block instead of solving it.
+escalates the block instead of solving it.## The reference publisher in `docs/`
+
+`docs/mobilebg-direct-publisher.reference.mjs` is a **reconstruction**. The
+original was supplied on 2026-09-17; diff it against the copy before trusting
+either. The reconstruction silently lost a backslash-escape: it read
+`[style*=background-image]` where the original reads `[style*="background-image"]`.
+That selector matches nothing, so the "wait until every photo is attached" loop
+counted zero and every run failed at `0/N photos attached before final step`.
+That is a reconstruction defect, not a site fault.
+
+### What it proves
+
+It reached the real form and published real listings, so its identifiers are
+taken from the site rather than guessed. Ours match on `f5..f19` and the
+`actions=2` query string. It sets `f14` to `януари`; our requirement is April,
+so do not copy that value.
+
+### What our publisher is missing from it
+
+* `f11` — body type (`Джип`, `Пикап`, `Седан`, `Ван` …), which our
+  `FIELD_SELECTORS` omits entirely.
+* `f22` — the contact phone, hardcoded as `0887353653`.
+* Submitting step 1 programmatically with
+  `Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(f.elements.actions, '2')`
+  then `HTMLFormElement.prototype.submit.call(f)`, instead of hunting for a
+  «Продължи» control. Our `advanceFromDataStage` searches for that control by
+  text and gives up when it is not a visible enabled button.
+* Confirming the result with the exact text `Преглед на обявата`, and then
+  opening the public listing and counting *really loaded* photos
+  (`naturalWidth > 0`) rather than trusting the form.
+
+### What it does not solve
+
+It reads jobs from a local JSON file and ships photos through an external
+browser gateway (`V4_GATEWAY_URL`, `V4_RUN_TOKEN`), bypassing Supabase entirely.
+Our drafts live in the database and the live screen reads the run state from
+there. Copy the techniques, not the plumbing.
+
+It also runs inside a real, already-signed-in browser session driven over the
+DevTools protocol — the same footing as the agent session that reached the form.
+That is why it never met the Cloudflare challenge, and why neither it nor any
+other script resolves the challenge problem described above.
+
+### The decisive experiment, when a form session is available
+
+Run the reference script against one catalog draft from a browser profile that
+can actually reach the form. It answers, in one shot, whether the field mapping
+and the two-step submit really work — everything currently hidden behind the 403.
+Everything else in this file is inference until that runs.
+
+## Look for an existing secret before adding one
+
+Before adding a repository secret, list what already exists — a key may already
+be stored under a different name:
+
+```bash
+gh secret list --repo tasevrosen86-cpu/auto-import-control-center
+```
+
+The deploy reads `${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}`; if the owner stored
+the key as `VITE_SUPABASE_SERVICE_ROLE_KEY` or similar, that listing explains
+both why the deploy warns about a missing key and where the value already is.
