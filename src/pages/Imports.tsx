@@ -16,6 +16,7 @@ import {
   type FieldSection, type MobileBgFieldDef,
 } from '@/lib/mobile_bg_field_map';
 import { getPublishReadiness } from '@/lib/mobile_publisher';
+import { LivePublishScreen } from '@/components/LivePublishScreen';
 import type {
   ImportRecord, ImportConflict,
   MobileBgDraft, MobileBgDraftField, MobileBgDraftExtra,
@@ -26,7 +27,7 @@ import type {
 const MOBILE_BG_VISIBLE_FIELD_KEYS = new Set([
   'category', 'make', 'model', 'modification', 'fuel', 'condition',
   'power', 'euro_standard', 'gearbox', 'displacement', 'price', 'currency',
-  'mileage', 'year', 'month', 'color', 'location', 'vin',
+  'vat_included', 'mileage', 'year', 'month', 'color', 'location', 'vin',
   'title', 'description', 'final_description',
   'seller_name', 'phone', 'email', 'mobile_bg_profile', 'ad_type',
   'source_type', 'source_url', 'source_listing_id',
@@ -965,6 +966,9 @@ function draftAutofillRows(draft: MobileBgDraft, loadedFields: MobileBgDraftFiel
     // Mobile.bg refuses to publish without a production month. RoyalCarsBG
     // always lists in April, so the broker never picks one by hand.
     month: MOBILE_BG_DEFAULT_MONTH,
+    // Mobile.bg blocks the price step until one of the three VAT options is
+    // chosen. RoyalCarsBG always sells with VAT included.
+    vat_included: MOBILE_BG_DEFAULT_VAT,
   };
   const sources: Record<string, string> = {
     title: 'agent',
@@ -976,6 +980,7 @@ function draftAutofillRows(draft: MobileBgDraft, loadedFields: MobileBgDraftFiel
     source_type: 'agent',
     location: 'agent',
     month: 'manual',
+    vat_included: 'manual',
   };
 
   const now = new Date().toISOString();
@@ -1005,11 +1010,13 @@ function draftAutofillRows(draft: MobileBgDraft, loadedFields: MobileBgDraftFiel
 // displacement, euro standard, colour, VIN) plus Заглавие and Цена, which the
 // broker always sets by hand.
 const MOBILE_BG_DEFAULT_MONTH = 'Април';
+const MOBILE_BG_DEFAULT_VAT = 'Цената е с включено ДДС';
 
 const SOURCE_LOCKED_FIELDS = new Set([
   'category', 'make', 'model', 'year', 'mileage', 'fuel', 'gearbox',
   'condition', 'drivetrain', 'currency', 'description', 'final_description',
   'location', 'seller_name', 'phone', 'ad_type', 'source_type', 'month',
+  'vat_included',
 ]);
 
 function isSourceImported(draft: MobileBgDraft): boolean {
@@ -1035,50 +1042,52 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
   const [editValues, setEditValues] = useState<Record<string, string>>({});
   const [savingFields, setSavingFields] = useState(false);
   const [saveFieldsError, setSaveFieldsError] = useState<string | null>(null);
+  // Pressing "Публикувай" swaps this page for the live screen. Going back shows
+  // the same draft again, so the broker never loses the form they were editing.
+  const [showLiveView, setShowLiveView] = useState(false);
 
-  useEffect(() => {
-    async function load() {
-      const [dRes, fRes, eRes, iRes, lRes, ddRes, pRes] = await Promise.all([
-        supabase.from('mobile_bg_drafts').select('*').eq('id', draftId).maybeSingle(),
-        supabase.from('mobile_bg_draft_fields').select('*').eq('draft_id', draftId).order('field_key'),
-        supabase.from('mobile_bg_draft_extras').select('*').eq('draft_id', draftId).order('group_name'),
-        supabase.from('mobile_bg_draft_images').select('*').eq('draft_id', draftId).order('display_order'),
-        supabase.from('mobile_bg_draft_action_log').select('*').eq('draft_id', draftId).order('created_at', { ascending: false }),
-        supabase.from('mobile_bg_dedup_checks').select('*').eq('draft_id', draftId).order('created_at', { ascending: false }),
-        supabase.from('mobile_bg_publish_jobs').select('*').eq('draft_id', draftId).maybeSingle(),
-      ]);
-      const loadedDraft = (dRes.data || null) as MobileBgDraft | null;
-      const loadedFields = (fRes.data || []) as MobileBgDraftField[];
-      let effectiveFields = loadedFields;
-      if (loadedDraft) {
-        const autofillRows = draftAutofillRows(loadedDraft, loadedFields);
-        if (autofillRows.length > 0) {
-          const { error: autofillError } = await supabase
-            .from('mobile_bg_draft_fields')
-            .upsert(autofillRows, { onConflict: 'draft_id,field_key' });
-          if (!autofillError) {
-            effectiveFields = [...loadedFields, ...autofillRows] as MobileBgDraftField[];
-            await supabase.from('mobile_bg_draft_action_log').insert({
-              draft_id: loadedDraft.id,
-              action: 'PUBLISH_FIELDS_AUTOFILLED',
-              actor: 'Агент',
-              details: { fields: autofillRows.map(row => row.field_key) },
-            });
-          }
+  const loadDraft = useCallback(async () => {
+    const [dRes, fRes, eRes, iRes, lRes, ddRes, pRes] = await Promise.all([
+      supabase.from('mobile_bg_drafts').select('*').eq('id', draftId).maybeSingle(),
+      supabase.from('mobile_bg_draft_fields').select('*').eq('draft_id', draftId).order('field_key'),
+      supabase.from('mobile_bg_draft_extras').select('*').eq('draft_id', draftId).order('group_name'),
+      supabase.from('mobile_bg_draft_images').select('*').eq('draft_id', draftId).order('display_order'),
+      supabase.from('mobile_bg_draft_action_log').select('*').eq('draft_id', draftId).order('created_at', { ascending: false }),
+      supabase.from('mobile_bg_dedup_checks').select('*').eq('draft_id', draftId).order('created_at', { ascending: false }),
+      supabase.from('mobile_bg_publish_jobs').select('*').eq('draft_id', draftId).maybeSingle(),
+    ]);
+    const loadedDraft = (dRes.data || null) as MobileBgDraft | null;
+    const loadedFields = (fRes.data || []) as MobileBgDraftField[];
+    let effectiveFields = loadedFields;
+    if (loadedDraft) {
+      const autofillRows = draftAutofillRows(loadedDraft, loadedFields);
+      if (autofillRows.length > 0) {
+        const { error: autofillError } = await supabase
+          .from('mobile_bg_draft_fields')
+          .upsert(autofillRows, { onConflict: 'draft_id,field_key' });
+        if (!autofillError) {
+          effectiveFields = [...loadedFields, ...autofillRows] as MobileBgDraftField[];
+          await supabase.from('mobile_bg_draft_action_log').insert({
+            draft_id: loadedDraft.id,
+            action: 'PUBLISH_FIELDS_AUTOFILLED',
+            actor: 'Агент',
+            details: { fields: autofillRows.map(row => row.field_key) },
+          });
         }
       }
-      setDraft(loadedDraft);
-      setFields(effectiveFields);
-      setEditValues(Object.fromEntries(effectiveFields.map(field => [field.field_key, field.value || ''])));
-      setExtras((eRes.data || []) as MobileBgDraftExtra[]);
-      setImages((iRes.data || []) as MobileBgDraftImage[]);
-      setLogs((lRes.data || []) as MobileBgDraftActionLog[]);
-      setDedupChecks((ddRes.data || []) as MobileBgDedupCheck[]);
-      setPublishJob((pRes.data || null) as MobileBgPublishJob | null);
-      setLoading(false);
     }
-    load();
+    setDraft(loadedDraft);
+    setFields(effectiveFields);
+    setEditValues(Object.fromEntries(effectiveFields.map(field => [field.field_key, field.value || ''])));
+    setExtras((eRes.data || []) as MobileBgDraftExtra[]);
+    setImages((iRes.data || []) as MobileBgDraftImage[]);
+    setLogs((lRes.data || []) as MobileBgDraftActionLog[]);
+    setDedupChecks((ddRes.data || []) as MobileBgDedupCheck[]);
+    setPublishJob((pRes.data || null) as MobileBgPublishJob | null);
+    setLoading(false);
   }, [draftId]);
+
+  useEffect(() => { void loadDraft(); }, [loadDraft]);
 
   // Extras are optional on every source and are never automated for AutoTrader
   // Canada, so the broker picks them by hand. Toggling writes the choice straight
@@ -1193,6 +1202,7 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
       });
       setPublishJob(data as MobileBgPublishJob);
       setDraft(current => current ? { ...current, status: 'PUBLISH_QUEUED', publish_error: null } : current);
+      setShowLiveView(true);
     } catch (error) {
       window.alert(`Заявката не можа да бъде изпратена: ${error instanceof Error ? error.message : 'неизвестна грешка'}`);
     } finally {
@@ -1202,6 +1212,8 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
 
   if (loading) return <div className="flex items-center justify-center h-96 text-slate-400">Зареждане...</div>;
   if (!draft) return <div className="text-center text-slate-400 py-12">Черновата не е намерена</div>;
+
+  if (showLiveView) return <LivePublishScreen draftId={draftId} onBack={() => { setShowLiveView(false); void loadDraft(); }} />;
 
   const fieldsByKey = new Map(fields.map(field => [field.field_key, field]));
   const extrasByKey = new Map(extras.map(extra => [extra.extra_key, extra]));
