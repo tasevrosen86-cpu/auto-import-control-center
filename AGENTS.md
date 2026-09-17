@@ -48,11 +48,12 @@ When changing access here there are three roles to satisfy:
 * `authenticated` — the single signed-in admin; needs full read/write on every
   table the UI touches.
 * `anon` — in practice the publisher worker, which runs with the public key when
-  the service role key is absent. It genuinely needs to *read*
-  `mobile_bg_drafts`, `mobile_bg_draft_images` and
-  `mobile_bg_draft_action_log` (to load the draft, download its photos and log
-  the run), plus insert/update on `mobile_bg_drafts` and
-  `mobile_bg_publish_jobs`. Never `DELETE`.
+  the service role key is absent. It needs to *read* `mobile_bg_draft_fields`,
+  `mobile_bg_draft_extras` and `mobile_bg_draft_images` (to load the draft's
+  values, extras and photos), plus `select, insert, update` on
+  `mobile_bg_publish_jobs`, `update` on `mobile_bg_drafts` and `insert` on
+  `mobile_bg_draft_action_log`. It never reads `mobile_bg_drafts` itself and
+  never needs `DELETE`.
 * `service_role` — what the publisher *should* use; it bypasses RLS entirely.
 
 A `42501` on a table whose policy looks correct is a missing **grant**, not a
@@ -132,4 +133,61 @@ curl -s "https://cgftjqwebvddtsbcbeml.supabase.co/rest/v1/<table>?select=id&limi
 ```
 
 A `401` with code `42501` confirms a missing grant. Never write to the queue this
-way — `claim_mobile_bg_publish_job` mutates state and will claim a real job.
+way — `claim_mobile_bg_publish_job` mutates state and will claim a real job.## Two broken deployment paths, not one
+
+### The URL importer has no worker on the server
+
+The intake path is: `createDraftFromSourceUrl` in `src/lib/draft_create.ts`
+invokes the `queue-source-intake` edge function, which calls the
+`queue_source_intake` RPC to insert into `source_listing_jobs` and to create the
+draft. That part works — both edge functions are deployed and reachable, and the
+draft does get created.
+
+Nothing then ever processes the queue. `services/source-intake-worker` requires
+`SUPABASE_SERVICE_ROLE_KEY` and exits immediately without it. `deploy-vps.yml`
+builds the seam but never completes it: it unpacks the worker tarball into
+`/home/ubuntu/auto-import-control-center/services/source-intake-worker`, yet
+installs a systemd unit only for the publisher. There is no unit file anywhere in
+the repository for the intake worker — line 118 of the deploy only *reads* an
+`EnvironmentFiles` property from a `source-intake-worker.service` that has never
+been installed. No cron entry starts it either.
+
+Consequence: **URL import can never produce a populated draft, however complete
+the catalog flow becomes.** The draft stays empty and `source_listing_jobs` keeps
+the job `QUEUED` for ever. This is the second half of the original complaint, and
+it is a deployment gap rather than a code bug.
+
+Fix, when picking it up: add `SUPABASE_SERVICE_ROLE_KEY` as a repository secret,
+write it into `/etc/aicc-source-intake.env` in the deploy, and install the
+worker's `.service` and `.timer` the same way the publisher is installed. The
+worker always needs the service role key — it has no anon fallback, unlike the
+publisher. Its `ingest-source-listing` call also passes
+`SUPABASE_SERVICE_ROLE_KEY` as the bearer token directly, so the key is not
+optional on any path.
+
+### Look for the owner's `SUPABASE_SERVICE_ROLE_KEY` GitHub secret first
+
+The deploy already tries to find the service role key in this order:
+
+1. the `Environment` property of any unit whose name matches
+   `(source|intake|worker|import|publish)`;
+2. the `EnvironmentFiles` of those same units;
+3. `${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}` — only if one was set up already.
+
+The key is expected to be the owner's `SUPABASE_SERVICE_ROLE_KEY` repository
+secret, under exactly that name. Before building anything new, check whether it
+exists: if it does, the deploy starts picking it up on its own and the warning
+stops.
+
+## The public key is published on purpose
+
+`src/lib/supabase.ts` contains the publishable `anon` key, and the deploy writes
+the same value into `/etc/aicc-mobile-publisher.env` as `SUPABASE_ANON_KEY`. They
+match exactly. This is not a leak to fix: Supabase publishable keys are meant to
+ship in the browser bundle and are useless without a session plus a matching
+grant. Its JWT payload is `{"role":"anon","ref":"cgftjqwebvddtsbcbeml"}`.
+
+Cheaper in future than a full SSH diagnostic: a `curl` of
+`raw.githubusercontent.com/.../src/lib/supabase.ts` plus a read-only table probe
+settles whether the deployed key is the public one. The *service role* key is the
+secret; the publishable key is not.
