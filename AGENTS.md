@@ -190,4 +190,70 @@ grant. Its JWT payload is `{"role":"anon","ref":"cgftjqwebvddtsbcbeml"}`.
 Cheaper in future than a full SSH diagnostic: a `curl` of
 `raw.githubusercontent.com/.../src/lib/supabase.ts` plus a read-only table probe
 settles whether the deployed key is the public one. The *service role* key is the
-secret; the publishable key is not.
+secret; the publishable key is not.## Why publishing fails: Mobile.bg is behind Cloudflare
+
+The worker never reaches the listing form. `mobile.bg` answers it with a `403`
+Cloudflare interstitial — `server: cloudflare`, title `Just a moment...`, no
+form controls at all. Reproduce it read-only at any time:
+
+```bash
+curl -s -D - -o /dev/null "https://www.mobile.bg/pcgi/mobile.cgi?pubtype=1&act=6&subact=4&actions=1" \
+  -H 'User-Agent: Mozilla/5.0 ... Chrome/131.0'
+# HTTP/2 403, server: cloudflare
+```
+
+This is what every `NEEDS_CONFIGURATION` row in `mobile_bg_publish_jobs`
+actually means. The stored `result.skipped` lists all twenty fields against
+`f5..f19`, and `result.live.frame` is a blank white 1280x720 screen — the
+challenge page, not a half-filled form. The browser profile at
+`MOBILE_BG_USER_DATA_DIR` is empty, so no clearance cookie was ever stored:
+there has never been a successful session.
+
+Two traps in the old code made this look like a mapping bug, and both are fixed:
+
+* `loginIfNeeded` returned `already_logged_in` whenever the page had no password
+  box. The challenge page has no password box either, so a blocked run reported a
+  successful login. It now checks for the form itself first.
+* Nothing distinguished an interstitial from the form. `isChallengePage` now
+  does, and `waitForForm` gives the challenge time to clear before reporting.
+
+### The bundled browser cannot pass it
+
+The server has **no real Chrome**: `google-chrome`, `google-chrome-stable`,
+`chromium` and `chromium-browser` are all absent. Playwright 1.63.0 has fetched
+only `chromium-1243` and `chromium_headless_shell-1243`. The worker runs
+`MOBILE_BG_HEADLESS=true`, which selects the headless shell — the build Cloudflare
+is most suspicious of. `launchBrowser` now prefers a real Chrome channel and
+falls back to bundled Chromium, but on the server that fallback is what runs, so
+**setting `channel: 'chrome'` alone will not get past the challenge.**
+
+### What actually needs deciding
+
+Cloudflare's managed challenge cannot be solved reliably by a headless browser,
+and the run happens from a datacenter IP that is itself a signal. There are three
+honest options, in rough order of effort:
+
+1. **Solve the challenge once in a real browser on the server and keep the
+   profile.** Install a desktop Chrome plus `xvfb`, run the publisher headed,
+   and complete the challenge by hand over VNC or RDP. The clearance cookie lands
+   in the persistent profile and later runs reuse it. Cheapest, but the cookie
+   expires and the challenge returns, so it is a recurring manual step rather than
+   a fix.
+2. **Residential or mobile proxy.** Publishes from an IP Cloudflare does not
+   pre-flag, which removes most of the challenge. Needs a paid third-party
+   service and an architecture decision about credentials.
+3. **Mobile.bg's own bulk-upload path.** Ask the site whether it offers an
+   authorised dealer feed or API upload. It is the only approach that is both
+   stable and within their terms, and it removes the browser from the loop
+   entirely.
+
+Do not paper over this by loosening the field mapping or treating the run as
+successful: the fields are mapped correctly — the test suite proves that against
+the stub — and no mapping change can conjure a form out of a 403 page.
+
+### Confirm before hammering
+
+`finish` writes `NEEDS_CONFIGURATION` rather than `QUEUED`, and `claim` only
+picks up `QUEUED`, so a job does **not** retry in a loop. Keep it that way while
+the challenge is unresolved: an automatic retry against a Cloudflare challenge
+escalates the block instead of solving it.
