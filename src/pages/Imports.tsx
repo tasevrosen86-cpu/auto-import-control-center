@@ -26,7 +26,7 @@ import type {
 const MOBILE_BG_VISIBLE_FIELD_KEYS = new Set([
   'category', 'make', 'model', 'modification', 'fuel', 'condition',
   'power', 'euro_standard', 'gearbox', 'displacement', 'price', 'currency',
-  'mileage', 'year', 'month', 'color', 'location', 'vin',
+  'vat_included', 'mileage', 'year', 'month', 'color', 'location', 'vin',
   'title', 'description', 'final_description',
   'seller_name', 'phone', 'email', 'mobile_bg_profile', 'ad_type',
   'source_type', 'source_url', 'source_listing_id',
@@ -965,6 +965,9 @@ function draftAutofillRows(draft: MobileBgDraft, loadedFields: MobileBgDraftFiel
     // Mobile.bg refuses to publish without a production month. RoyalCarsBG
     // always lists in April, so the broker never picks one by hand.
     month: MOBILE_BG_DEFAULT_MONTH,
+    // Mobile.bg blocks the price step until one of the three VAT options is
+    // chosen. RoyalCarsBG always sells with VAT included.
+    vat_included: MOBILE_BG_DEFAULT_VAT,
   };
   const sources: Record<string, string> = {
     title: 'agent',
@@ -976,6 +979,7 @@ function draftAutofillRows(draft: MobileBgDraft, loadedFields: MobileBgDraftFiel
     source_type: 'agent',
     location: 'agent',
     month: 'manual',
+    vat_included: 'manual',
   };
 
   const now = new Date().toISOString();
@@ -1005,11 +1009,13 @@ function draftAutofillRows(draft: MobileBgDraft, loadedFields: MobileBgDraftFiel
 // displacement, euro standard, colour, VIN) plus Заглавие and Цена, which the
 // broker always sets by hand.
 const MOBILE_BG_DEFAULT_MONTH = 'Април';
+const MOBILE_BG_DEFAULT_VAT = 'Цената е с включено ДДС';
 
 const SOURCE_LOCKED_FIELDS = new Set([
   'category', 'make', 'model', 'year', 'mileage', 'fuel', 'gearbox',
   'condition', 'drivetrain', 'currency', 'description', 'final_description',
   'location', 'seller_name', 'phone', 'ad_type', 'source_type', 'month',
+  'vat_included',
 ]);
 
 function isSourceImported(draft: MobileBgDraft): boolean {

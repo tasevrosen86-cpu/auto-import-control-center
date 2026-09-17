@@ -27,8 +27,8 @@ const MOBILE_BG_MAX_PHOTOS = 17;
 const FIELD_SELECTORS: Record<string, string> = {
   make: '[name="f5"]', model: '[name="f6"]', modification: '[name="f7"]', fuel: '[name="f8"]',
   condition: '[name="f25"]', power: '[name="f9"]', euro_standard: '[name="f29"]', gearbox: '[name="f10"]',
-  displacement: '[name="f30"]', price: '[name="f12"]', vat_included: '[name="f31"]',
-  currency: '[name="f13"]', mileage: '[name="f16"]', month: '[name="f14"]', year: '[name="f15"]',
+  displacement: '[name="f30"]', price: '[name="f12"]', currency: '[name="f13"]', vat_included: '[name="f31"]',
+  mileage: '[name="f16"]', month: '[name="f14"]', year: '[name="f15"]',
   color: '[name="f17"]', location: '[name="f18"]', vin: '[name="f32"]',
 };
 const VALUE_ALIASES: Record<string, Record<string, string>> = {
@@ -36,7 +36,7 @@ const VALUE_ALIASES: Record<string, Record<string, string>> = {
   condition: { Използван: 'Употребяван' },
   euro_standard: Object.fromEntries([1, 2, 3, 4, 5, 6].map(n => [`Euro ${n}`, `Евро ${n}`])),
   month: Object.fromEntries(['Януари','Февруари','Март','Април','Май','Юни','Юли','Август','Септември','Октомври','Ноември','Декември'].map(v => [v, v.toLocaleLowerCase('bg')])),
-  vat_included: { Да: 'Цената е с включено ДДС', Не: 'Цената е без ДДС' },
+  vat_included: { Да: 'Цената е с включено ДДС', Не: 'Цената е без ДДС', 'Цената е с включено ДДС': 'Цената е с включено ДДС', 'Цената е без ДДС': 'Цената е без ДДС', 'Частна продажба./Освободена от ДДС продажба': 'Частна продажба./Освободена от ДДС продажба' },
 };
 const EXTRA_ALIASES: Record<string, string> = {
   ABS: 'Антиблокираща система', ESP: 'Електронна програма за стабилизиране', ISOFIX: 'Система ISOFIX',
@@ -180,10 +180,14 @@ async function uploadSelectedImages(page: Page, images: DraftImage[]) {
   }
 }
 
+function normalizeOptionText(value: string) {
+  return value.replace(/\s+/g, ' ').trim().replace(/[.\s]+$/, '').toLocaleLowerCase('bg');
+}
+
 async function selectText(page: Page, selector: string, wanted: string) {
   const select = page.locator(selector).first();
-  const normalized = wanted.trim().toLocaleLowerCase('bg');
-  const option = (await select.locator('option').allTextContents()).find(v => v.trim().toLocaleLowerCase('bg') === normalized);
+  const normalized = normalizeOptionText(wanted);
+  const option = (await select.locator('option').allTextContents()).find(v => normalizeOptionText(v) === normalized);
   if (!option) return false;
   await select.selectOption({ label: option });
   return true;
