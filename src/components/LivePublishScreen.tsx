@@ -25,10 +25,11 @@ function isTerminal(status: string | undefined) {
   return status === 'COMPLETED' || status === 'FAILED' || status === 'NEEDS_LOGIN' || status === 'NEEDS_CONFIGURATION' || status === 'PREVIEW_READY';
 }
 
-function statusBadge(status: string) {
+function statusBadge(status: string | undefined) {
   if (status === 'COMPLETED') return { color: 'emerald' as const, text: 'Публикувано' };
   if (status === 'RUNNING') return { color: 'blue' as const, text: 'Публикувам в момента' };
   if (status === 'QUEUED') return { color: 'amber' as const, text: 'Чака изпълнение' };
+  if (!status) return { color: 'slate' as const, text: 'Няма заявка' };
   return { color: 'rose' as const, text: 'Спряно' };
 }
 
@@ -46,6 +47,7 @@ export function LivePublishScreen({ draftId, onBack }: { draftId: string; onBack
   const [images, setImages] = useState<MobileBgDraftImage[]>([]);
   const [stages, setStages] = useState<StageEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const lastStageRef = useRef<string | null>(null);
 
   const load = useCallback(async () => {
@@ -54,6 +56,14 @@ export function LivePublishScreen({ draftId, onBack }: { draftId: string; onBack
       supabase.from('mobile_bg_publish_jobs').select('*').eq('draft_id', draftId).maybeSingle(),
       supabase.from('mobile_bg_draft_images').select('*').eq('draft_id', draftId).order('display_order'),
     ]);
+    // A rejected read used to look identical to "nothing has happened yet", so
+    // the screen span forever. The reason is shown instead of swallowed.
+    const failures = [
+      ['черновата', dRes.error],
+      ['заявката за публикуване', jRes.error],
+      ['снимките', iRes.error],
+    ].filter(([, error]) => Boolean(error)) as Array<[string, { message: string }]>;
+    setLoadError(failures.length ? failures.map(([what, error]) => `${what}: ${error.message}`).join(' · ') : null);
     setDraft((dRes.data || null) as MobileBgDraft | null);
     setJob((jRes.data || null) as MobileBgPublishJob | null);
     setImages((iRes.data || []) as MobileBgDraftImage[]);
@@ -78,7 +88,7 @@ export function LivePublishScreen({ draftId, onBack }: { draftId: string; onBack
     return () => clearInterval(timer);
   }, [job?.status, load]);
 
-  const badge = statusBadge(job?.status || 'QUEUED');
+  const badge = statusBadge(job?.status);
   const result = (job?.result || {}) as Record<string, unknown>;
   const live = (result.live || {}) as LiveState;
   const uploaded = Number((result.image_upload as { uploaded?: number } | undefined)?.uploaded || 0);
@@ -104,6 +114,13 @@ export function LivePublishScreen({ draftId, onBack }: { draftId: string; onBack
         <Badge color={badge.color}>{badge.text}</Badge>
       </div>
 
+      {loadError && (
+        <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+          <p className="font-bold">Екранът не може да прочете данните от базата</p>
+          <p className="mt-0.5 break-words font-mono text-[11px]">{loadError}</p>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="rounded-md border border-slate-200 bg-white shadow-sm">
           <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-2">
@@ -116,7 +133,9 @@ export function LivePublishScreen({ draftId, onBack }: { draftId: string; onBack
           </div>
           <div className="space-y-3 p-3">
             <p className="rounded border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-800">
-              {live.stage || (job?.status === 'QUEUED' ? 'Заявката е в опашката. Изпълнението започва до минута.' : 'Изчаквам първия ред от сървъра…')}
+              {live.stage || (job
+                ? 'Заявката е в опашката. Изпълнението започва до минута.'
+                : 'Няма заявка за публикуване за тази чернова. Върни се и натисни „Публикувай“.')}
             </p>
             {isTerminal(job?.status) && <p className="text-xs text-slate-700">{TERMINAL_HEADLINES[job!.status]}</p>}
             {errorText && (
