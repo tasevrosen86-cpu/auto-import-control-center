@@ -106,4 +106,51 @@ which is a build-time flag and not a secret.
 * Confirm the gateway CDP path, or rewrite `send()` against its real API.
 * A page to pick the car from the catalogue and fill `payload` with the real
   fields; today a job is queued empty and `prepare` is what is exercised.
-* Apply the migration.
+* Apply the migration.## Transport: the Browser Use infrastructure API
+
+The preferred transport creates a **real remote Chromium through the Browser Use
+infrastructure API** and attaches to it. Nothing is launched on this machine,
+which matters because the local browser is measured to be blocked.
+
+```
+POST https://api.browser-use.com/api/v4/browsers
+  X-Browser-Use-API-Key: $BROWSER_USE_API_KEY
+  Content-Type: application/json
+→ { id, cdpUrl, liveUrl }
+```
+
+then `chromium.connectOverCDP(cdpUrl)`. No Browser Use AI Agent is involved: we
+create a browser and drive it with our own step logic.
+
+The endpoint and header name were verified against the live service — a request
+without a key returns `401` naming the header and the key prefix (`bu_`), which
+confirms both. Only the response envelope is unconfirmed, so `browser_use.mjs`
+reads `id`, `cdpUrl` and `liveUrl` from either a flat object or a nested one
+rather than assuming a shape.
+
+`stopBrowser()` deletes the remote browser when the run ends, so a session does
+not keep billing or hold its live view open.
+
+### Transport selection
+
+`openSession()` prefers, in order: `BROWSER_USE_API_KEY` → the older gateway
+(`V4_*`) → local Playwright. The local fallback is a last resort and is known
+not to reach mobile.bg.
+
+### The first task is a gate, not a formality
+
+```
+node src/index.mjs browser-test
+```
+
+Creates a remote browser, opens the form URL, and reports whether
+`document.forms.namedItem("pub")` really exists with its fields:
+
+* `SUCCESS` — the form and its controls are there, and `f5` is among them.
+* `browser_blocked` — anything else. The reason names the block markers found
+  (`just a moment`, `cf-challenge`, `cloudflare`, …) and shows the page text, so
+  a block is never misread as a field-mapping problem.
+
+The verdict, the live view URL and the browser id are printed, and the same
+result is written to `publication_logs`. Do not enable the real publish until
+this reports `SUCCESS` from the machine that will run it.

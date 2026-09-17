@@ -63,11 +63,17 @@ export async function openForm(session) {
 
 // The form is only really there if it carries its own controls. Reading this
 // first keeps a block page from being mistaken for a half-filled form.
+//
+// The verdict is explicit: `SUCCESS` only when document.forms.namedItem("pub")
+// exists with its fields, otherwise `browser_blocked`. Cloudflare and its
+// interstitial are named in the reason so a block is never misread as a
+// mapping problem.
 export async function inspectForm(session) {
-  return evaluate(session, `(() => {
+  const seen = await evaluate(session, `(() => {
     const form = document.forms.namedItem("pub")
     const names = form ? [...form.elements].map((e) => e.name).filter(Boolean) : []
     const text = (document.body?.innerText || "").replace(/\\s+/g, " ").trim()
+    const html = (document.documentElement?.outerHTML || "").toLowerCase()
     return {
       url: location.href,
       title: document.title,
@@ -76,9 +82,17 @@ export async function inspectForm(session) {
       controls: names.slice(0, 40),
       has_make: names.includes("f5"),
       has_file_input: document.querySelectorAll('input[type="file"]').length > 0,
-      body_text: text.slice(0, 300),
+      body_text: text.slice(0, 400),
+      markers: ['just a moment', 'cf-challenge', 'cf_chl_', 'checking your browser', 'attention required', 'cloudflare', 'технически затруднения', 'достъпът е ограничен', 'access denied']
+        .filter((marker) => html.includes(marker) || text.toLowerCase().includes(marker)),
     }
   })()`);
+
+  const verdict = seen.form_found && seen.control_count > 0 && seen.has_make ? 'SUCCESS' : 'browser_blocked';
+  const reason = verdict === 'SUCCESS'
+    ? 'Формата на Mobile.bg е реална: document.forms.namedItem("pub") съществува с полетата си.'
+    : `Формата не се появи: ${seen.control_count} полета.${seen.markers.length ? ` Маркери на блокировка: ${seen.markers.join(', ')}.` : ''} Страницата върна: ${seen.body_text.slice(0, 200) || 'нищо'}`;
+  return { ...seen, verdict, reason };
 }
 
 // Phone and description are required by Mobile.bg but are constant for us, so

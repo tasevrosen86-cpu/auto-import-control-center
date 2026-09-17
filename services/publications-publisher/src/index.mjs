@@ -9,7 +9,7 @@
 // service role key is not required.
 
 import { createClient } from '@supabase/supabase-js';
-import { openSession, describeTransport, browserUseConfigured } from './session.mjs';
+import { openSession, describeTransport } from './session.mjs';
 import { inspectForm, publishOne, openForm } from './form.mjs';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -44,15 +44,17 @@ async function finish(job, status, details, error) {
 }
 
 // Step one of the user's plan: prove what the browser really loads before any
-// publisher logic is trusted.
+// publisher logic is trusted. The remote Browser Use browser is what is being
+// tested, so its live view URL is reported for watching the session.
 export async function browserTest() {
   const session = await openSession();
   try {
     await log(null, 'browser_test', `Транспорт: ${JSON.stringify(describeTransport())}`);
+    if (session.liveUrl) await log(null, 'browser_test', `Наблюдение на сесията: ${session.liveUrl}`);
     await openForm(session);
     const form = await inspectForm(session);
-    await log(null, 'browser_test', `Отговор: ${JSON.stringify(form)}`, form.form_found ? 'info' : 'error');
-    return form;
+    await log(null, 'browser_test', `Присъда: ${form.verdict}. ${form.reason}`, form.verdict === 'SUCCESS' ? 'info' : 'error');
+    return { ...form, live_url: session.liveUrl || null, browser_id: session.browserId || null };
   } finally {
     await session.close();
   }
@@ -116,11 +118,18 @@ if (isMain) {
   const run = command === 'browser-test' ? browserTest() : drain();
   run.then((result) => {
     if (command === 'browser-test') {
-      console.log(`\nФормата е достъпна: ${result.form_found ? 'ДА' : 'НЕ'}`);
-      console.log(`Полета: ${result.control_count}${result.has_make ? ', марката е налична' : ''}`);
-      if (!result.form_found) console.log(`Страницата върна: ${result.body_text}`);
-      console.log(`\nТранспорт: ${browserUseConfigured() ? 'Browser Use шлюз' : 'локален Playwright'}`);
-      process.exit(result.form_found ? 0 : 1);
+      console.log('\n================ ПРИСЪДА ================');
+      console.log(`  ${result.verdict}`);
+      // The live view is the point of the remote browser: it can be watched by
+      // a person while the session runs.
+      if (result.live_url) console.log(`  Наблюдение на сесията: ${result.live_url}`);
+      if (result.browser_id) console.log(`  Браузър: ${result.browser_id}`);
+      console.log(`  Форма: ${result.form_found ? 'да' : 'не'} (${result.control_count} полета${result.has_make ? ', марката е налична' : ''})`);
+      console.log(`  Адрес: ${result.url}`);
+      console.log(`  ${result.reason}`);
+      console.log(`  Транспорт: ${JSON.stringify(describeTransport())}`);
+      console.log('=========================================');
+      process.exit(result.verdict === 'SUCCESS' ? 0 : 1);
     }
     console.log(JSON.stringify(result));
   }).catch((error) => { console.error(error.message || error); process.exit(1); });
