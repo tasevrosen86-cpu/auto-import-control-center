@@ -1,0 +1,17 @@
+{
+  "name": "aicc-publications-publisher",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Publishing engine for the Publications section. Separate from the «Обяви» publisher on purpose.",
+  "scripts": {
+    "browser-test": "node src/index.mjs browser-test",
+    "drain": "node src/index.mjs drain"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.57.4"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.63.0"
+  }
+}

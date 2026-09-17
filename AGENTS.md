@@ -317,4 +317,29 @@ gh secret list --repo tasevrosen86-cpu/auto-import-control-center
 
 The deploy reads `${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}`; if the owner stored
 the key as `VITE_SUPABASE_SERVICE_ROLE_KEY` or similar, that listing explains
-both why the deploy warns about a missing key and where the value already is.
+both why the deploy warns about a missing key and where the value already is.## The Publications section is a second, isolated publish path
+
+`services/publications-publisher/` + `src/pages/Publications.tsx` + the
+`publication_*` tables. It must stay isolated from «Обяви»: it does not import,
+edit or replace `services/mobile-publisher` and does not read or write the
+`mobile_bg_*` tables. The old flow remains the fallback.
+
+The point of the second path is the transport, not the steps. The proven
+`mobilebg-direct-publisher` never met the Cloudflare challenge because it does
+not launch a browser — it is handed an already-running, already-authenticated
+Browser Use session over CDP. `src/form.mjs` keeps those steps and
+`src/session.mjs` swaps the transport, because the gateway and Playwright both
+speak CDP.
+
+`browser-test` is a gate, not a formality: it reports whether the form and its
+fields are really present, and it currently answers no.
+
+## The gateway call shape is the one unknown left
+
+The proven script shows exactly one gateway call — `browser/upload` with a
+`FormData` body and a bearer token. How it drives the DevTools protocol is not
+shown. `services/publications-publisher/src/session.mjs` therefore treats both
+paths as configuration (`BROWSER_CDP_PATH`, `BROWSER_UPLOAD_PATH`) instead of
+hardcoding a guess, and `send()` is the single place to change once the real
+relay is known. If the gateway does not relay arbitrary CDP methods, that one
+function is rewritten; `form.mjs` stays as it is.

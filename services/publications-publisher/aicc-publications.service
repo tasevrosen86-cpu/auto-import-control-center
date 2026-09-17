@@ -1,0 +1,18 @@
+[Unit]
+Description=AICC Publications publisher (Browser Use session)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/ubuntu/auto-import-control-center/services/publications-publisher
+# Credentials live here, mode 600, owned by root. The Browser Use gateway token
+# must never reach the frontend bundle.
+EnvironmentFile=/etc/aicc-publications.env
+ExecStart=/usr/bin/node src/index.mjs drain
+# A single run may spend minutes inside the form, so a stuck run must not pile up.
+TimeoutStartSec=900
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
