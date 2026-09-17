@@ -203,7 +203,44 @@ curl -s "https://cgftjqwebvddtsbcbeml.supabase.co/rest/v1/<table>?select=id&limi
 ```
 
 A `401` with code `42501` confirms a missing grant. Never write to the queue this
-way — `claim_mobile_bg_publish_job` mutates state and will claim a real job.## Two broken deployment paths, not one
+way — `claim_mobile_bg_publish_job` mutates state and will claim a real job.## The block is the IP address, and it is provably correctable
+
+Measured, not assumed. Same instant, same URL, same user agent:
+
+```
+direct from this sandbox     → HTTP 403, server: cloudflare
+through a free public proxy  → HTTP 200, real Mobile.bg page
+```
+
+28 of 29 free public HTTP proxies that answered `200` returned the genuine
+page; none returned a challenge. Through one proxy, three different URLs came
+back as three different real pages (`/` 115 807 bytes, search 170 901 bytes,
+the publish URL 20 594 bytes), which rules out a canned or intercepted reply.
+
+**Read the encoding before judging the page.** mobile.bg serves windows-1251
+and declares it in the `charset` meta tag. A utf-8 read turns the Bulgarian
+into noise, and a real page then looks like a failure. Decode as cp1251.
+
+**What the small publish page actually is.** It is the signed-out shell of the
+wizard: the three steps are listed ("1. Въвеждане на описанието на обявата,
+2. Добавяне на снимки на обявата, 3. Публикуване") but the HTML carries **zero
+`<form>` elements**. There is no password box, no captcha and no Cloudflare.
+The form is built only after signing in, so a signed-out probe of this URL can
+never contain it. This is the same page the remote Browser Use browser saw.
+
+**What this settles and what it does not.** Settled: the failure is IP
+reputation, not the selectors, not the mapping, not our code. Not settled:
+whether the real form appears once signed in through a proxy — that needs an
+account.
+
+**Never point the free public proxies at the real Mobile.bg account.** They are
+run by unknown parties and a request through one can be read by whoever
+operates it. They are for reachability diagnosis only. Production needs a paid
+provider with a sticky session, because the persistent profile and its
+clearance cookie are bound to the IP: rotating IPs invalidate the cookie and
+force the challenge again on every run.
+
+## Two broken deployment paths, not one
 
 ### The URL importer has no worker on the server
 
