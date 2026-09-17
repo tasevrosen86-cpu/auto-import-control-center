@@ -1,0 +1,77 @@
+name: Publications browser test
+
+# Step one of the plan, run against the real thing: create a Browser Use remote
+# browser, open the Mobile.bg form, and report whether
+# document.forms.namedItem("pub") actually exists.
+#
+# This is a gate. Nothing is published, no draft is touched, and the old «Обяви»
+# flow is not involved. It only reads a page and prints the verdict.
+#
+# The key comes from the BROWSER_USE_API_KEY repository secret, so it never
+# appears in this file, in the build output, or in the frontend.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  browser-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install publisher dependencies
+        working-directory: services/publications-publisher
+        env:
+          # connectOverCDP only needs the Playwright client; the browser itself
+          # runs remotely, so there is no reason to download one here.
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: npm install --no-audit --no-fund
+
+      - name: Verify the key is present
+        env:
+          BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
+        run: |
+          if [ -z "$BROWSER_USE_API_KEY" ]; then
+            echo "::error::BROWSER_USE_API_KEY е празна. Добави я като repository secret."
+            exit 1
+          fi
+          echo "Ключът е наличен (${#BROWSER_USE_API_KEY} знака)."
+
+      - name: Browser test
+        id: test
+        working-directory: services/publications-publisher
+        env:
+          BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
+          # Already public in this repository; the publisher only needs the anon
+          # key because publication_* is granted for it.
+          SUPABASE_URL: https://cgftjqwebvddtsbcbeml.supabase.co
+          SUPABASE_ANON_KEY: sb_publishable_3szh1-AiAAUYDeVBwO7bJQ_gXhkBU0A
+        run: |
+          set +e
+          node src/index.mjs browser-test 2>&1 | tee /tmp/browser-test.log
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      # The verdict and the live view URL are the whole point of this run, so
+      # they are surfaced on the run summary instead of being buried in the log.
+      - name: Publish the verdict
+        if: always()
+        run: |
+          {
+            echo "## Публикации — тест на браузъра"
+            echo ""
+            echo '```'
+            cat /tmp/browser-test.log 2>/dev/null || echo "Няма запис."
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
