@@ -80,13 +80,39 @@ async function waitForFormInAnyFrame(session, attempts) {
   return false;
 }
 
-// The form is only really there if it carries its own controls. Reading this
-// first keeps a block page from being mistaken for a half-filled form.
+// The proven script was handed an already-signed-in session, so it never had to
+// log in. A freshly created remote browser is signed out, and the publisher URL
+// then serves the public page: "Вход | Нова Регистрация". Without this step the
+// form is never reachable, however well the transport works.
 //
-// The verdict is explicit: `SUCCESS` only when document.forms.namedItem("pub")
-// exists with its fields, otherwise `browser_blocked`. Cloudflare and its
-// interstitial are named in the reason so a block is never misread as a
-// mapping problem.
+// The selectors are the ones the old flow already used. Credentials come from
+// the environment and are never logged.
+export async function ensureLoggedIn(session) {
+  if (!session.page) return { state: 'unknown' };
+  const page = session.page;
+  const passwordBoxes = await page.locator('input[type="password"]').count().catch(() => 0);
+  if (passwordBoxes === 0) return { state: 'already_logged_in' };
+
+  const username = process.env.MOBILE_BG_USERNAME;
+  const password = process.env.MOBILE_BG_PASSWORD;
+  if (!username || !password) return { state: 'credentials_missing' };
+
+  const user = page.locator(process.env.MOBILE_BG_LOGIN_USERNAME_SELECTOR || 'input[name="username"], input[name="email"], input[type="email"], input[type="text"]').first();
+  const pass = page.locator(process.env.MOBILE_BG_LOGIN_PASSWORD_SELECTOR || 'input[type="password"]').first();
+  const submit = page.locator(process.env.MOBILE_BG_LOGIN_SUBMIT_SELECTOR || 'button[type="submit"], input[type="submit"]').first();
+  if (!await user.count().catch(() => 0) || !await pass.count().catch(() => 0) || !await submit.count().catch(() => 0)) {
+    return { state: 'form_not_recognized' };
+  }
+  await user.fill(username);
+  await pass.fill(password);
+  await submit.click();
+  await page.waitForLoadState('domcontentloaded').catch(() => undefined);
+  await sleep(2000);
+  // A missing password box only means signed in once we are off the login page.
+  const stillAsked = await page.locator('input[type="password"]').count().catch(() => 0);
+  return { state: stillAsked === 0 ? 'logged_in' : 'login_failed' };
+}
+
 export async function inspectForm(session) {
   // Frames first: the form is inside one, and reading only the top document is
   // what made a real Mobile.bg page look like a block page.
@@ -158,6 +184,11 @@ export async function publishOne(session, item) {
   try {
     const makeText = { RAM: 'Dodge', Volkswagen: 'VW' }[item.make] || item.make;
     const modelText = item.model;
+    // Sign in before the form: a fresh remote browser is signed out.
+    await openForm(session);
+    const login = await ensureLoggedIn(session);
+    if (login.state === 'credentials_missing') throw new Error('login_credentials_missing');
+    if (login.state === 'form_not_recognized' || login.state === 'login_failed') throw new Error(`login_failed:${login.state}`);
     await openForm(session);
     if (!(await selectText(session, 'f5', makeText)).ok) throw new Error(`make_option_missing:${makeText}`);
     await waitForOptions(session, 'f6');

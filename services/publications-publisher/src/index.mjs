@@ -10,7 +10,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { openSession, describeTransport } from './session.mjs';
-import { inspectForm, publishOne, openForm } from './form.mjs';
+import { inspectForm, publishOne, openForm, ensureLoggedIn } from './form.mjs';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
@@ -52,9 +52,14 @@ export async function browserTest() {
     await log(null, 'browser_test', `Транспорт: ${JSON.stringify(describeTransport())}`);
     if (session.liveUrl) await log(null, 'browser_test', `Наблюдение на сесията: ${session.liveUrl}`);
     await openForm(session);
+    // Sign in first: the publisher URL serves the public page to a signed-out
+    // browser, so the form only appears after this.
+    const login = await ensureLoggedIn(session);
+    await log(null, 'browser_test', `Вход: ${login.state}`, login.state === 'login_failed' || login.state === 'form_not_recognized' ? 'error' : 'info');
+    await openForm(session);
     const form = await inspectForm(session);
     await log(null, 'browser_test', `Присъда: ${form.verdict}. ${form.reason}`, form.verdict === 'SUCCESS' ? 'info' : 'error');
-    return { ...form, live_url: session.liveUrl || null, browser_id: session.browserId || null };
+    return { ...form, login_state: login.state, live_url: session.liveUrl || null, browser_id: session.browserId || null };
   } finally {
     await session.close();
   }
@@ -120,6 +125,7 @@ if (isMain) {
     if (command === 'browser-test') {
       console.log('\n================ ПРИСЪДА ================');
       console.log(`  ${result.verdict}`);
+      if (result.login_state) console.log(`  Вход: ${result.login_state}`);
       // The live view is the point of the remote browser: it can be watched by
       // a person while the session runs.
       if (result.live_url) console.log(`  Наблюдение на сесията: ${result.live_url}`);

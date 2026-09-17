@@ -53,11 +53,18 @@ jobs:
         working-directory: services/publications-publisher
         env:
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
+          # The remote browser starts signed out, so the publisher URL serves the
+          # public page. These are the same credentials the old flow already uses.
+          MOBILE_BG_USERNAME: ${{ secrets.MOBILE_BG_USERNAME }}
+          MOBILE_BG_PASSWORD: ${{ secrets.MOBILE_BG_PASSWORD }}
           # Already public in this repository; the publisher only needs the anon
           # key because publication_* is granted for it.
           SUPABASE_URL: https://cgftjqwebvddtsbcbeml.supabase.co
           SUPABASE_ANON_KEY: sb_publishable_3szh1-AiAAUYDeVBwO7bJQ_gXhkBU0A
         run: |
+          if [ -z "$MOBILE_BG_USERNAME" ] || [ -z "$MOBILE_BG_PASSWORD" ]; then
+            echo "::warning::MOBILE_BG_USERNAME / MOBILE_BG_PASSWORD липсват. Входът няма да мине и формата няма да се появи."
+          fi
           set +e
           node src/index.mjs browser-test 2>&1 | tee /tmp/browser-test.log
           echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
