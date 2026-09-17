@@ -1,0 +1,67 @@
+name: Diagnostics
+
+# Read-only inspection of the VPS. Prints no secret values, only key names.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.VPS_SSH_KEY }}
+
+      - name: Trust VPS host
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Inspect
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || 22 }}
+        run: |
+          ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" 'bash -s' <<'REMOTE' || true
+          echo "############ СЪРВЪР ############"
+          date; uptime; echo
+
+          echo "############ УСЛУГИ ############"
+          systemctl is-active aicc-mobile-publisher.timer 2>&1 | sed 's/^/timer: /'
+          systemctl is-active aicc-mobile-publisher.service 2>&1 | sed 's/^/service: /'
+          systemctl is-active source-intake-worker.service 2>&1 | sed 's/^/source-intake: /'
+          echo
+          systemctl list-timers --all --no-pager 2>/dev/null | head -8
+          echo
+
+          echo "############ НАСТРОЙКИ: само имена на ключове ############"
+          sudo sed -n 's/^\([A-Z_]*\)=.*/\1/ p' /etc/aicc-mobile-publisher.env 2>/dev/null | sort
+          echo "--- има ли служебен ключ (без стойност) ---"
+          if sudo grep -q '^SUPABASE_SERVICE_ROLE_KEY=.\+' /etc/aicc-mobile-publisher.env 2>/dev/null; then
+            echo "SUPABASE_SERVICE_ROLE_KEY: ДА"
+          else
+            echo "SUPABASE_SERVICE_ROLE_KEY: НЕ"
+          fi
+          for N in MOBILE_BG_USERNAME MOBILE_BG_PASSWORD; do
+            if sudo grep -q "^$N=.\+" /etc/aicc-mobile-publisher.env 2>/dev/null; then echo "$N: зададен"; else echo "$N: ЛИПСВА"; fi
+          done
+          echo
+
+          echo "############ ЕДНОКРАТЕН ВХОД: има ли запазен профил ############"
+          ls -la /home/ubuntu/.local/share/aicc-mobile-bg 2>&1 | head -10
+          echo
+
+          echo "############ ПОСЛЕДНИ 60 РЕДА ОТ ПУБЛИКУВАЩИЯ ############"
+          sudo journalctl -u aicc-mobile-publisher.service -n 60 --no-pager 2>&1 | tail -60
+          echo
+
+          echo "############ САЙТ ############"
+          ls -la /var/www/html/ 2>&1 | head -5
+          grep -o 'assets/index-[A-Za-z0-9_-]*\.js' /var/www/html/index.html 2>/dev/null | sed 's/^/сервиран билд: /'
+          curl -s -o /dev/null -w 'локален отговор: HTTP %{http_code}\n' http://127.0.0.1/ 2>&1
+          REMOTE
