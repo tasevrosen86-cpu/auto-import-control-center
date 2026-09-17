@@ -113,4 +113,17 @@ jobs:
           echo
           echo "  има ли защита:"
           echo "$BODY" | grep -oiE "cloudflare|ddos-guard|captcha|recaptcha|turnstile|technical|технически затруднения|robot" | sort | uniq -c | sed 's/^/    /'
+          echo
+
+          echo "############ МОЖЕ ЛИ РАБОТНИКЪТ ДА МИНЕ ПРЕЗ ЗАЩИТАТА ############"
+          echo "(фиксираната поправка иска истински Chrome, не вградения Chromium)"
+          for B in google-chrome google-chrome-stable chromium chromium-browser; do
+            printf "  %-22s " "$B"
+            if command -v "$B" >/dev/null 2>&1; then "$B" --version 2>/dev/null || echo "има го"; else echo "липсва"; fi
+          done
+          echo "  вграден Chromium на Playwright:"
+          find "$PUBLISHER_DIR/node_modules/playwright-core/.local-browsers" /home/*/.cache/ms-playwright -maxdepth 1 -name "chromium*" 2>/dev/null | sed 's/^/    /' | head -5
+          echo "  версия на Playwright:"
+          PUBLISHER_DIR="/home/ubuntu/auto-import-control-center/services/mobile-publisher"
+          node -e "console.log('    ' + require('$PUBLISHER_DIR/node_modules/playwright/package.json').version)" 2>/dev/null || echo "    (не може да се прочете)"
           REMOTE

@@ -74,7 +74,60 @@ const EXTRA_ALIASES: Record<string, string> = {
   'Диференциална блокировка': 'Блокаж на диференциала', 'Офроуд пакет': 'OFFROAD пакет',
 };
 
+// Mobile.bg sits behind Cloudflare, which answers an automated request with a
+// 403 challenge page: "Just a moment...". That page has no form controls, so
+// every field is reported missing and the run looks like a form-mapping bug
+// while the real cause is the challenge.
+//
+// Three things are needed for a browser session to pass automated checks:
+//   * a real Chrome channel rather than bundled Chromium, because the bundled
+//     build carries an automation fingerprint that the challenge rejects;
+//   * the usual automation switches disabled, so navigator.webdriver is false;
+//   * the persistent profile in MOBILE_BG_USER_DATA_DIR, whose clearance cookie
+//     outlives a single run once one challenge has been solved.
+const CONTEXT_OPTIONS = {
+  headless: process.env.MOBILE_BG_HEADLESS === 'true',
+  channel: process.env.MOBILE_BG_BROWSER_CHANNEL || 'chrome',
+  locale: 'bg-BG',
+  timezoneId: 'Europe/Sofia',
+  userAgent: process.env.MOBILE_BG_USER_AGENT
+    || 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  args: ['--disable-blink-features=AutomationControlled', '--no-default-browser-check', '--no-first-run'],
+  ignoreDefaultArgs: ['--enable-automation'],
+} as const;
+
+// Markers of a Cloudflare interstitial rather than the listing form. Kept
+// together so the check is a single place to update.
+const CHALLENGE_MARKERS = ['just a moment', 'cf-challenge', 'cf_chl_', 'checking your browser', 'attention required'];
+const CHALLENGE_MIN_BYTES = 20000;
+
+async function isChallengePage(page: Page) {
+  const html = await page.content().catch(() => '');
+  if (!html) return true;
+  // A real form carries many controls; the challenge is a small interstitial.
+  if (html.length < CHALLENGE_MIN_BYTES) return true;
+  const lower = html.toLowerCase();
+  if (CHALLENGE_MARKERS.some(marker => lower.includes(marker))) return true;
+  // The listing form always exposes the make field. Use it as the litmus test
+  // so a page that merely changed its markup is not misread as a challenge.
+  return await page.locator('[name="f5"], input[name="f1"]').count() === 0;
+}
+
+// Reads the page HTML and answers a challenge if one is present.
+async function waitForForm(page: Page) {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (!await isChallengePage(page)) return true;
+    await page.waitForTimeout(1000);
+  }
+  return !await isChallengePage(page);
+}
+
 async function loginIfNeeded(page: Page) {
+  // "No password box" only means logged in when the form is actually there.
+  // On a challenge page there is no password box either, which is why a blocked
+  // run used to report already_logged_in while nothing was filled.
+  if (await isChallengePage(page)) return 'challenge';
   if (await page.locator('input[type="password"]').count() === 0) return 'already_logged_in';
   const username = process.env.MOBILE_BG_USERNAME;
   const password = process.env.MOBILE_BG_PASSWORD;
@@ -454,6 +507,20 @@ async function finish(job: PublishJob, status: string, details: Record<string, u
   await db.from('mobile_bg_draft_action_log').insert({ draft_id: job.draft_id, action: `MOBILE_PUBLISH_${status}`, actor: workerName, details });
 }
 
+// A real Chrome passes automated checks that bundled Chromium fails, but the
+// server may not have it installed. Fall back to Chromium rather than failing
+// the whole run, and let the challenge check report the truth afterwards.
+async function launchBrowser() {
+  try {
+    return await chromium.launchPersistentContext(profileDir, CONTEXT_OPTIONS);
+  } catch (cause) {
+    console.warn(`Неуспешно стартиране с канал „${CONTEXT_OPTIONS.channel}“, връщам се към вградения Chromium: ${cause instanceof Error ? cause.message : cause}`);
+    const { channel, ...fallback } = CONTEXT_OPTIONS;
+    void channel;
+    return await chromium.launchPersistentContext(profileDir, fallback);
+  }
+}
+
 async function run() {
   const { data: candidate, error: findError } = await db
     .from('mobile_bg_publish_jobs')
@@ -488,7 +555,7 @@ async function run() {
   if (fieldResult.error) return await finish(job, 'FAILED', {}, `Грешка при четене на полетата: ${fieldResult.error.message}`);
   if (extraResult.error) return await finish(job, 'FAILED', {}, `Грешка при четене на екстрите: ${extraResult.error.message}`);
   if (imageResult.error) return await finish(job, 'FAILED', {}, `Грешка при четене на снимките: ${imageResult.error.message}. Провери достъпа SELECT до mobile_bg_draft_images.`);
-  const context = await chromium.launchPersistentContext(profileDir, { headless: process.env.MOBILE_BG_HEADLESS === 'true' });
+  const context = await launchBrowser();
   // A slow page must not look like a dead run, so the screen is refreshed on a
   // timer while the worker waits. The captures are best-effort and unref'd so a
   // hanging screenshot can never keep the process alive.
@@ -499,7 +566,21 @@ async function run() {
     await page.goto(newListingUrl, { waitUntil: 'domcontentloaded' });
     heartbeat = setInterval(() => { void refreshFrame(job, page); }, 3000);
     heartbeat.unref?.();
+    // The challenge is answered by the page itself once the browser looks real,
+    // so give it time and then report honestly if it never cleared. Without this
+    // the run blamed the form mapping for what was really a 403.
+    await noteStage(job, page, 'Изчаквам формата на Mobile.bg да се зареди.');
+    if (!await waitForForm(page)) {
+      return await finish(job, 'NEEDS_CONFIGURATION', {
+        url: page.url(),
+        login_state: 'challenge',
+        blocked_by: 'cloudflare',
+      }, 'Cloudflare не пусна работника до формата (страница „Just a moment…“). Нужен е браузър без автоматизационен отпечатък или еднократно решаване на проверката.');
+    }
     const loginState = await loginIfNeeded(page);
+    if (loginState === 'challenge') {
+      return await finish(job, 'NEEDS_CONFIGURATION', { url: page.url(), login_state: 'challenge', blocked_by: 'cloudflare' }, 'Cloudflare не пусна работника до формата (страница „Just a moment…“).');
+    }
     if (loginState === 'credentials_missing') return await finish(job, 'NEEDS_LOGIN', { url: page.url() }, 'Нужен е еднократен защитен вход в Mobile.bg на сървъра.');
     if (loginState === 'form_not_recognized' || loginState === 'login_failed') return await finish(job, 'NEEDS_LOGIN', { url: page.url(), reason: loginState }, 'Mobile.bg не прие автоматичния вход.');
     await noteStage(job, page, 'Влизането е успешно. Попълвам полетата.');
