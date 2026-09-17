@@ -80,7 +80,7 @@ function detailFallback(raw: Record<string, unknown>) {
     power: pick([/(?:horsepower|power|мощност)[^0-9]{0,20}([0-9][0-9 .]*)/i]),
     displacement: pick([/(?:displacement|engineDisplacement|кубатура|работен обем)[^0-9]{0,20}([0-9][0-9 .]*)/i]),
     euro: pick([/(?:euroStandard|euro_standard|emissionClass|екокатегория)[^:"]{0,10}[:"]\s*([^,"}]+)/i]),
-    color: pick([/(?:color|vehicleColor|exteriorColor|цвят)[^:"]{0,10}[:"]\s*([^,"}]+)/i]),
+    color: pick([/(?:colou?r|vehicleColor|exteriorColor|bodyColor|цвят)[^:"]{0,10}[:"]\s*([^,"}]+)/i]),
   };
 }
 
@@ -114,7 +114,7 @@ export function createDraftSeed(vehicle: Vehicle, marketplaces: VehicleMarketpla
     power: firstRaw(raw, ['power_hp', 'power', 'horsepower', 'enginePower']) || detail.power,
     displacement: firstRaw(raw, ['displacement_cc', 'displacement', 'engineDisplacement', 'engineSize']) || detail.displacement,
     euro_standard: normaliseEuro(firstRaw(raw, ['euro_standard', 'euroStandard', 'emissionClass', 'emissions', 'euro']) || detail.euro),
-    color: firstRaw(raw, ['color', 'vehicleColor', 'exteriorColor']) || detail.color,
+    color: firstRaw(raw, ['color', 'vehicleColor', 'exteriorColor', 'bodyColor', 'colour']) || detail.color,
     condition: 'Използван',
     drivetrain: asText(raw.drivetrain),
     vin: asText(source?.vin ?? raw.vin),

@@ -249,7 +249,7 @@ function valuesFromDetailText(text: string) {
       /(?:euro\s*(?:standard|class)?|екокатегория|евро\s*стандарт)\s*[:-]?\s*(euro\s*[1-6][a-z]?|евро\s*[1-6][a-z]?)/i,
     ]),
     color: detailValue(text, [
-      /(?:exterior\s+color|vehicle\s+color|color|цвят)\s*[:-]?\s*([^\n|,;]+)/i,
+      /(?:exterior\s+colou?r|vehicle\s+colou?r|colou?r|цвят)\s*[:-]?\s*([^\n|,;]+)/i,
     ]),
   };
 }
@@ -284,9 +284,15 @@ function normalizeColor(value: string | null): string | null {
   if (source.includes('grey') || source.includes('gray')) return 'Сив';
   if (source.includes('black')) return 'Черен';
   if (source.includes('white')) return 'Бял';
+  if (source.includes('silver')) return 'Сребърен';
+  if (source.includes('beige') || source.includes('tan')) return 'Бежов';
+  if (source.includes('brown')) return 'Кафяв';
+  if (source.includes('green')) return 'Зелен';
+  if (source.includes('orange')) return 'Оранжев';
+  if (source.includes('purple')) return 'Лилав';
+  if (source.includes('yellow') || source.includes('gold')) return 'Златен';
   if (source.includes('red')) return 'Червен';
   if (source.includes('blue')) return 'Син';
-  if (source.includes('silver')) return 'Сребърен';
   return value;
 }
 function imagesFrom(root: unknown): JsonRecord[] {
@@ -365,7 +371,7 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string,
   const price = nested(vehicle, 'offers', ['price']) || firstValue(vehicle, ['price', 'salePrice']);
   const currency = nested(vehicle, 'offers', ['priceCurrency']) || firstValue(vehicle, ['priceCurrency', 'currency']);
   const euroStandard = normalizeEuro(detail.euro || firstValue(vehicle, ['euroStandard', 'euro_standard', 'emissionClass', 'emissions', 'euro']));
-  const color = normalizeColor(detail.color || firstValue(vehicle, ['color', 'vehicleColor', 'exteriorColor']));
+  const color = normalizeColor(detail.color || firstValue(vehicle, ['color', 'vehicleColor', 'exteriorColor', 'bodyColor', 'colour']));
   const description = companyDescription;
   const fields: Array<{ key: string; value: string; source: string; proof: string }> = [];
   const push = (key: string, value: string | null) => { if (value) fields.push({ key, value, source, proof: job.source_url }); };
