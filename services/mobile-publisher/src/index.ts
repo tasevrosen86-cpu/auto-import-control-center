@@ -193,6 +193,34 @@ async function selectText(page: Page, selector: string, wanted: string) {
   return true;
 }
 
+// "Заглавие" belongs to the description part of the form and its control name is
+// not among the known f-fields, so it is located by its visible label rather than
+// by guessing a name. MOBILE_BG_TITLE_SELECTOR pins it if the label changes.
+async function findTitleControl(page: Page) {
+  const override = process.env.MOBILE_BG_TITLE_SELECTOR;
+  if (override) {
+    const pinned = page.locator(override).first();
+    if (await pinned.count()) return pinned;
+  }
+  const candidates = page.locator('label, td, th');
+  const count = await candidates.count();
+  for (let i = 0; i < count; i += 1) {
+    const node = candidates.nth(i);
+    const text = (await node.innerText().catch(() => '')).replace(/\s+/g, ' ').trim().toLocaleLowerCase('bg');
+    if (text !== 'заглавие') continue;
+    const forId = await node.getAttribute('for');
+    if (forId) {
+      const linked = page.locator(`#${forId}`).first();
+      if (await linked.count()) return linked;
+    }
+    const inside = node.locator('input[type="text"], input:not([type]), textarea').first();
+    if (await inside.count()) return inside;
+    const sibling = node.locator('xpath=following::input[1] | following::textarea[1]').first();
+    if (await sibling.count()) return sibling;
+  }
+  return null;
+}
+
 async function populateStepOne(page: Page, fields: DraftField[], extras: DraftExtra[]) {
   const values = new Map(fields.map(field => [field.field_key, String(field.value || '').trim()]));
   const filled: string[] = [];
@@ -234,6 +262,15 @@ async function populateStepOne(page: Page, fields: DraftField[], extras: DraftEx
     if (await textarea.count()) { await textarea.fill(description); filled.push('final_description'); }
     else skipped.push({ key: 'final_description', value: description, reason: 'Полето за описание липсва.' });
   }
+  // The ad title is required by Mobile.bg, so a missing control is reported
+  // instead of silently dropped: that is what makes the draft look complete
+  // while the published ad has no title.
+  const title = values.get('title') || '';
+  if (title) {
+    const titleControl = await findTitleControl(page);
+    if (titleControl) { await titleControl.fill(title); filled.push('title'); }
+    else skipped.push({ key: 'title', value: title, reason: 'Полето „Заглавие“ не беше намерено във формата.' });
+  }
   return { filled, skipped };
 }
 
@@ -258,8 +295,89 @@ async function recordPublishedListing(draftId: string, details: Record<string, u
   if (fieldRows.length) await db.from('mobile_bg_draft_fields').upsert(fieldRows, { onConflict: 'draft_id,field_key' });
 }
 
+// The broker watches the run from inside the site, so the worker publishes its
+// current step and a small JPEG of the page into the job's existing result
+// column. Nothing new is stored: the result column is already readable by the
+// signed-in broker, so no public bucket, extra port or schema change is needed.
+// The frame is a data URL and is deliberately best-effort — a failed capture
+// must never abort publishing.
+type LiveState = { stage: string; frame: string | null; frame_at: string };
+
+// The worker owns the job for the whole run, so the live state is kept in
+// memory and written as a whole instead of re-reading the row on every tick.
+let liveState: LiveState | null = null;
+// Extra run detail that belongs with the live state, such as which fields the
+// worker managed to write. Kept apart from liveState because the frame refresh
+// replaces that object on every tick.
+let liveDetails: Record<string, unknown> = {};
+
+// Live writes are serialised and switched off before the final result is
+// stored. Otherwise a heartbeat already in flight could read the row before
+// finish() writes it and save a frame-only result afterwards, wiping the run
+// outcome. The flag is re-checked after the read for the same reason.
+let liveEnabled = true;
+let liveWriteChain: Promise<void> = Promise.resolve();
+
+function writeLive(jobId: string) {
+  liveWriteChain = liveWriteChain.then(async () => {
+    if (!liveEnabled || !liveState) return;
+    const { data } = await db.from('mobile_bg_publish_jobs').select('result').eq('id', jobId).maybeSingle();
+    if (!liveEnabled) return;
+    const existing = (data?.result || {}) as Record<string, unknown>;
+    await db.from('mobile_bg_publish_jobs')
+      .update({ result: { ...existing, ...liveDetails, live: liveState }, updated_at: new Date().toISOString() })
+      .eq('id', jobId);
+  });
+  return liveWriteChain;
+}
+
+async function captureFrame(page: Page): Promise<string | null> {
+  try {
+    const buffer = await page.screenshot({ type: 'jpeg', quality: 50 });
+    return `data:image/jpeg;base64,${buffer.toString('base64')}`;
+  } catch {
+    return null;
+  }
+}
+
+async function noteStage(job: PublishJob, page: Page, stage: string) {
+  liveState = { stage, frame: await captureFrame(page), frame_at: new Date().toISOString() };
+  await writeLive(job.id);
+}
+
+// Refreshes only the picture on the timer. Rewriting the stage here would erase
+// the message the main flow just set with a meaningless "still working".
+async function refreshFrame(job: PublishJob, page: Page) {
+  if (!liveState) return;
+  liveState = { ...liveState, frame: await captureFrame(page), frame_at: new Date().toISOString() };
+  await writeLive(job.id);
+}
+
+function stageLabel(status: string) {
+  if (status === 'COMPLETED') return 'Mobile.bg потвърди публикуването.';
+  if (status === 'PREVIEW_READY') return 'Стъпка 1 е попълнена.';
+  if (status === 'NEEDS_LOGIN') return 'Нужен е вход в Mobile.bg.';
+  if (status === 'NEEDS_CONFIGURATION') return 'Публикуването спря и чака корекция.';
+  return 'Публикуването не завърши.';
+}
+
 async function finish(job: PublishJob, status: string, details: Record<string, unknown>, error?: string) {
-  await db.from('mobile_bg_publish_jobs').update({ status, result: details, last_error: error || null, finished_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', job.id);
+  // The final result keeps the live stage so the screen can show how the run
+  // ended, including the last frame the broker was watching.
+  const live = liveState || { stage: stageLabel(status), frame: null, frame_at: new Date().toISOString() };
+  // Stop the heartbeat first and let any write already in flight land, so the
+  // outcome below is the last thing stored on the row.
+  liveEnabled = false;
+  await liveWriteChain.catch(() => undefined);
+  liveState = null;
+  await db.from('mobile_bg_publish_jobs').update({
+    status,
+    result: { ...liveDetails, ...details, live: { ...live, stage: error || live.stage } },
+    last_error: error || null,
+    finished_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  }).eq('id', job.id);
+  liveDetails = {};
   const draftStatus = status === 'COMPLETED' ? 'PUBLISHED' : status === 'PREVIEW_READY' ? 'APPROVED' : status === 'NEEDS_LOGIN' ? 'PUBLISH_LOGIN_REQUIRED' : 'ERROR';
   await db.from('mobile_bg_drafts').update({ status: draftStatus, publish_error: error || null, published_at: status === 'COMPLETED' ? new Date().toISOString() : null, updated_at: new Date().toISOString() }).eq('id', job.draft_id);
   if (status === 'COMPLETED') await recordPublishedListing(job.draft_id, details);
@@ -281,7 +399,7 @@ async function run() {
     .from('mobile_bg_publish_jobs')
     .update({
       status: 'RUNNING',
-      worker_name: workerName,
+      claimed_by: workerName,
       started_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })
@@ -301,20 +419,36 @@ async function run() {
   if (extraResult.error) return await finish(job, 'FAILED', {}, `Грешка при четене на екстрите: ${extraResult.error.message}`);
   if (imageResult.error) return await finish(job, 'FAILED', {}, `Грешка при четене на снимките: ${imageResult.error.message}. Провери достъпа SELECT до mobile_bg_draft_images.`);
   const context = await chromium.launchPersistentContext(profileDir, { headless: process.env.MOBILE_BG_HEADLESS === 'true' });
+  // A slow page must not look like a dead run, so the screen is refreshed on a
+  // timer while the worker waits. The captures are best-effort and unref'd so a
+  // hanging screenshot can never keep the process alive.
+  let heartbeat: NodeJS.Timeout | null = null;
   try {
     const page = context.pages()[0] || await context.newPage();
+    await noteStage(job, page, 'Отварям формата за нова обява в Mobile.bg.');
     await page.goto(newListingUrl, { waitUntil: 'domcontentloaded' });
+    heartbeat = setInterval(() => { void refreshFrame(job, page); }, 3000);
+    heartbeat.unref?.();
     const loginState = await loginIfNeeded(page);
     if (loginState === 'credentials_missing') return await finish(job, 'NEEDS_LOGIN', { url: page.url() }, 'Нужен е еднократен защитен вход в Mobile.bg на сървъра.');
     if (loginState === 'form_not_recognized' || loginState === 'login_failed') return await finish(job, 'NEEDS_LOGIN', { url: page.url(), reason: loginState }, 'Mobile.bg не прие автоматичния вход.');
+    await noteStage(job, page, 'Влизането е успешно. Попълвам полетата.');
     const result = await populateStepOne(page, fieldResult.data || [], extraResult.data || []);
+    await noteStage(job, page, `Полетата са попълнени. Пропуснати: ${result.skipped.length}.`);
+    // The per-field outcome is published while the run continues, so the screen
+    // can show which values landed and which were left out before the end.
+    liveDetails = { filled: result.filled, skipped: result.skipped };
+    await writeLive(job.id);
     const dataStage = await advanceFromDataStage(page);
     if (!dataStage.advanced) return await finish(job, 'NEEDS_CONFIGURATION', { ...result, data_stage: dataStage, url: page.url(), login_state: loginState }, dataStage.reason || 'Неуспешно преминаване към етапа със снимки.');
+    await noteStage(job, page, 'Преминах към стъпката със снимките.');
     const imageUpload = await uploadSelectedImages(page, (imageResult.data || []) as DraftImage[]);
     if (imageUpload.uploaded === 0) return await finish(job, 'NEEDS_CONFIGURATION', { ...result, data_stage: dataStage, image_upload: imageUpload, url: page.url(), login_state: loginState }, 'Няма качени избрани снимки. Избери поне една снимка за обявата.');
+    await noteStage(job, page, `Качени са ${imageUpload.uploaded} снимки.`);
     const screenshotPath = `/tmp/mobile-bg-${job.id}.png`;
     await page.screenshot({ path: screenshotPath, fullPage: true });
     if (job.mode === 'LIVE') {
+      await noteStage(job, page, 'Натискам реалния бутон „Публикувай“.');
       const submission = await submitAndVerifyOnMobileBg(page);
       await page.screenshot({ path: screenshotPath, fullPage: true });
       if (!submission.submitted || !submission.verified) {
@@ -326,7 +460,16 @@ async function run() {
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : 'Непозната грешка.';
     await finish(job, 'FAILED', { message }, message);
-  } finally { await context.close(); }
+  } finally {
+    if (heartbeat) clearInterval(heartbeat);
+    // Clears a job that never reached finish(): an exception thrown before any
+    // noteStage leaves no state, and a completed run has already reset it.
+    liveEnabled = false;
+    await liveWriteChain.catch(() => undefined);
+    liveState = null;
+    liveDetails = {};
+    await context.close();
+  }
 }
 
 run().catch(error => { console.error(error); process.exitCode = 1; });
