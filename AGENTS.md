@@ -26,22 +26,47 @@ npx tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bun
 ## Supabase access: the trap that broke publishing
 
 The site signs in as an `authenticated` user (`src/components/AuthGate.tsx` uses
-`signInWithPassword`), **not** as `anon`. The migrations that created the tables
-wrote RLS policies for both roles but only ever granted table privileges to
-`anon`, and `supabase/migrations/20260914203000_grant_mobile_publisher_access.sql`
-only granted to `anon` too. An `authenticated` user therefore hit
-`42501 permission denied for table ...` even though the policy allowed the
-operation.
+`signInWithPassword`), **not** as `anon`.
 
-When changing access here, remember there are **three** roles to satisfy:
+The real cause is broader than that one role.
+`supabase/migrations/20260912181419_001_initial_schema.sql` creates **80 RLS
+policies and zero grants**. In Postgres those are two separate layers: the policy
+decides *which rows*, the grant decides *whether at all*. Postgres checks the
+grant first, so a table with a perfectly permissive `USING (true)` policy still
+refuses with `42501 permission denied` when the role holds no privilege. The RLS
+default also grants nothing on a new table, so `vehicles`, `sales`,
+`calculations`, `imports`, `jobs` — everything — refuses reads for both roles.
 
-* `authenticated` — the signed-in admin; needs full read/write on app tables.
-* `anon` — the publisher worker when the service role key is missing; needs only
-  the `mobile_bg_*` tables, and never `DELETE`.
-* `service_role` — what the publisher *should* use.
+The later `20260914203000_grant_mobile_publisher_access.sql` did hand out grants,
+but only for the six `mobile_bg_*` publisher tables, and only the narrow subset
+the worker needs. That is why `mobile_bg_publish_jobs` answers and
+`mobile_bg_drafts` does not: the table the worker *writes* was granted, the one
+the worker *reads* was not.
+
+When changing access here there are three roles to satisfy:
+
+* `authenticated` — the single signed-in admin; needs full read/write on every
+  table the UI touches.
+* `anon` — in practice the publisher worker, which runs with the public key when
+  the service role key is absent. It genuinely needs to *read*
+  `mobile_bg_drafts`, `mobile_bg_draft_images` and
+  `mobile_bg_draft_action_log` (to load the draft, download its photos and log
+  the run), plus insert/update on `mobile_bg_drafts` and
+  `mobile_bg_publish_jobs`. Never `DELETE`.
+* `service_role` — what the publisher *should* use; it bypasses RLS entirely.
 
 A `42501` on a table whose policy looks correct is a missing **grant**, not a
 missing policy. Postgres reports the two differently.
+
+### Auth is a single hardcoded email
+
+`ADMIN_EMAIL` in `src/components/AuthGate.tsx` is the only thing standing between
+the public internet and the data. **This repository is public**, so that address
+is public. Anyone can call `signUp` with it; whether they get in depends on
+whether the Supabase project still has email confirmation switched on. If that
+setting is ever turned off, whoever asks first owns the account, and the policies
+above are wide open `USING (true)`. Keep confirmation on, or bind the tables to
+`auth.uid()` instead of `true`.
 
 ## Mobile.bg form behaviour
 
