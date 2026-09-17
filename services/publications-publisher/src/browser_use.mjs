@@ -46,7 +46,14 @@ export async function createBrowser() {
   try { data = JSON.parse(text); } catch { /* keep the raw text for the error */ }
   if (!response.ok) {
     // Never echo the key or the request headers, only what the service said.
-    throw new Error(`Browser Use отказа създаването на браузър: HTTP ${response.status} ${text.slice(0, 300)}`);
+    // The status is spelled out because the three failures here need completely
+    // different fixes, and they look alike from a distance.
+    const hint = response.status === 402
+      ? ' Акаунтът в Browser Use е без достатъчен баланс. Това не е блокировка и не е грешен ключ — зареди кредит.'
+      : response.status === 401
+        ? ' Ключът е невалиден или отменен.'
+        : '';
+    throw new Error(`Browser Use отказа създаването на браузър: HTTP ${response.status} ${text.slice(0, 300)}.${hint}`);
   }
 
   const id = pick(data, ['id', 'browserId', 'browser_id']);
