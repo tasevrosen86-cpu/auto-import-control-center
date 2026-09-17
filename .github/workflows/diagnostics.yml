@@ -70,4 +70,30 @@ jobs:
           ls -la /var/www/html/ 2>&1 | head -5
           grep -o 'assets/index-[A-Za-z0-9_-]*\.js' /var/www/html/index.html 2>/dev/null | sed 's/^/сервиран билд: /'
           curl -s -o /dev/null -w 'локален отговор: HTTP %{http_code}\n' http://127.0.0.1/ 2>&1
+          echo
+
+          echo "############ ВСИЧКИ НАШИ УСЛУГИ ############"
+          systemctl list-units --all --no-pager 2>/dev/null | grep -i "aicc\|intake\|publisher" | sed 's/  */ /g' | cut -c1-120
+          echo
+          echo "--- таймери ---"
+          systemctl list-timers --all --no-pager 2>/dev/null | grep -i "aicc\|intake\|publisher" | sed 's/  */ /g'
+          echo
+
+          echo "############ ФАЙЛОВЕ С НАСТРОЙКИ: къде има служебен ключ ############"
+          for F in $(sudo ls /etc/aicc*.env 2>/dev/null); do
+            printf "  %-40s " "$F"
+            if sudo grep -q '^SUPABASE_SERVICE_ROLE_KEY=.\+' "$F" 2>/dev/null; then echo "има служебен ключ"; else echo "няма служебен ключ"; fi
+            sudo sed -n 's/^\([A-Z_]*\)=.*/    \1/p' "$F" 2>/dev/null | sort | head -12
+          done
+          echo
+
+          echo "############ ЛОГОВЕ НА ДРУГАТА УСЛУГА (последни 25) ############"
+          UNIT=$(systemctl list-units --all --no-pager 2>/dev/null | grep -io "[a-z0-9@-]*intake[a-z0-9@-]*\.service" | head -1)
+          echo "единица: ${UNIT:-не е намерена}"
+          if [ -n "$UNIT" ]; then sudo journalctl -u "$UNIT" -n 25 --no-pager 2>&1 | tail -25; fi
+          echo
+
+          echo "############ ИМА ЛИ ВЪОБЩЕ НЯКАКВА ЧЕРНОВА ############"
+          echo "(броят се вижда само ако работникът има право на четене)"
+          sudo journalctl -u aicc-mobile-publisher.service --since "24 hours ago" --no-pager 2>&1 | grep -icE "42501|permission denied|Не мога|грешка" | sed 's/^/грешки за 24 часа: /'
           REMOTE
