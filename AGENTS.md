@@ -34,14 +34,18 @@
 > checks all pass. Old publisher: **zero line difference** — verify with
 > `git diff --stat HEAD~3 HEAD -- services/mobile-publisher`.
 >
-> **What is blocked and why.** `BROWSER_USE_API_KEY` is registered correctly in
-> OpenHands Cloud (confirm with
-> `curl -H "Authorization: Bearer $OPENHANDS_API_KEY" -H "Accept: application/json" "https://app.all-hands.dev/api/v1/secrets/search"`),
-> but a sandbox only receives secrets **at startup**. A conversation whose
-> sandbox started before the key was added sees an empty registry
-> (`/api/settings/secrets` → `{"secrets":[]}`) and no environment variable, and
-> cannot fix that by restarting. **Start a new conversation** so the key is
-> injected; then the work continues from here.
+> **What is blocked and why.** The key itself is settled: it is registered in
+> OpenHands Cloud, it works, and the workflow reads it as a 46-character secret.
+> Creating a browser now fails with **HTTP 402** — the Browser Use account holds
+> `$0.01` and a session needs at least `$0.01`. **This is a balance problem, not
+> a block, not a bad key.** Add credit and the same test runs unchanged.
+>
+> A sandbox only receives secrets **at startup**, so a conversation whose sandbox
+> started before the key was added sees an empty registry
+> (`/api/settings/secrets` → `{"secrets":[]}`) and cannot fix that by restarting.
+> Confirm the key's existence with
+> `curl -H "Authorization: Bearer $OPENHANDS_API_KEY" -H "Accept: application/json" "https://app.all-hands.dev/api/v1/secrets/search"`.
+> If the sandbox registry is empty, **start a new conversation**.
 >
 > **The very next action.** From a sandbox that has the key:
 >
