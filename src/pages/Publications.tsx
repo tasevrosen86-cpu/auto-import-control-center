@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Rocket, Play, FlaskConical, ExternalLink, RefreshCw, AlertTriangle, ClipboardCopy, Check, FileText } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import { Badge } from '@/components/Badge';
 import { formatDateTime } from '@/lib/format';
 import { buildSheet, missingInSheet, sheetAsText, type SheetRow } from '@/lib/publication_sheet';
 import type { MobileBgDraftField } from '@/types';

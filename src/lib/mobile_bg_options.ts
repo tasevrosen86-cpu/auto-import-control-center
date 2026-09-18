@@ -71,7 +71,7 @@ const MAKE_ALIASES: Record<string, string> = { RAM: 'Dodge', Volkswagen: 'VW' };
 export type PlanStep = {
   selector: string;
   value: string;
-  kind: 'select' | 'input' | 'textarea' | 'check';
+  kind: 'select' | 'input' | 'textarea';
   label: string;
   // True when the value came from the draft untouched, so a mismatch with
   // Mobile.bg's own option list can be told apart from a translation we made.

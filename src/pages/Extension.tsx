@@ -1,3 +1,18 @@
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { AlertTriangle, Chrome, ClipboardCopy, Check, Download, ExternalLink, Puzzle, RefreshCw, ShieldCheck, Smartphone } from 'lucide-react';
+import { supabase } from '@/lib/supabase';
+import { buildMobileBgPlan, type FillPlan } from '@/lib/mobile_bg_options';
+import { buildExtensionZip, buildUserscript, downloadExtension, type DraftPayload } from '@/lib/extension_build';
+import type { MobileBgDraftExtra, MobileBgDraftField } from '@/types';
+
+const FORM_URL = 'https://www.mobile.bg/pcgi/mobile.cgi?pubtype=1&act=6&subact=4&actions=1';
+
+type DraftOption = {
+  id: string;
+  title: string | null;
+  status: string;
+};
+
 export function Extension() {
   const [drafts, setDrafts] = useState<DraftOption[]>([]);
   const [selectedId, setSelectedId] = useState('');
