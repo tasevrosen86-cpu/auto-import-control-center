@@ -32,6 +32,10 @@ export const COUNTRY_CANDIDATES: Array<[string, string[]]> = [
   ['Южна Корея', ['Южна Корея', 'Корея', 'Южна Корея (Република Корея)']],
 ];
 
+// These are the strings the agent-driven session used when it published real
+// listings, so they were read off the live form rather than guessed. They are
+// still unvalidated by us: every fill this repository has attempted died at the
+// Cloudflare interstitial before reaching a single field.
 export const VALUE_ALIASES: Record<string, Record<string, string>> = {
   fuel: { Бензин: 'Бензинов', Дизел: 'Дизелов', Хибрид: 'Хибриден', 'Газ (LPG)': 'Газ' },
   condition: { Използван: 'Употребяван' },

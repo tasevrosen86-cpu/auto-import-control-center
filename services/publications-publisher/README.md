@@ -13,26 +13,29 @@ title `Just a moment...`, and **zero** form controls. That is why every
 `NEEDS_CONFIGURATION` row lists all twenty fields as missing and why the stored
 `live.frame` is a blank white screen. The fields were never the problem.
 
-The proven `mobilebg-direct-publisher` never met that challenge, and the reason
-is architectural rather than lucky: it does not launch a browser. It receives an
-already-running, already-authenticated Browser Use session over the DevTools
-protocol. A real browser, already signed in, from an address Cloudflare does not
-pre-flag, gets the form.
+The agent-driven session that published those listings never met that
+challenge, and the reason is architectural rather than lucky: it did not launch
+a browser. It drove an already-running, already-authenticated Browser Use
+session over the DevTools protocol. A real browser, already signed in, from an
+address Cloudflare does not pre-flag, gets the form.
 
-So this module keeps the proven step logic and changes only the transport.
+So this module keeps the step logic from that session's transcript and changes
+only the transport. Note what that does and does not buy: the transcript is
+evidence about the form, and it has never been executed as a script. This
+module has likewise never completed a live fill.
 
 ## Layout
 
 ```
 services/publications-publisher/
   src/session.mjs    two transports behind one { send(method, params) } interface
-  src/form.mjs       the form steps, taken from the proven script
+  src/form.mjs       the form steps, taken from the session transcript
   src/index.mjs      worker and CLI, touches publication_* only
   aicc-publications.service / .timer
 ```
 
 `form.mjs` is transport-agnostic on purpose: the gateway and Playwright both
-speak CDP, so the same steps run over either. That is what makes the proven
+speak CDP, so the same steps run over either. That is what makes the transcript
 logic reusable instead of rewritten.
 
 ## Transport
@@ -41,7 +44,7 @@ logic reusable instead of rewritten.
 When they are present the gateway is used; otherwise the code falls back to a
 local Playwright browser so the steps can still be exercised.
 
-**The gateway CDP path is an assumption.** The proven script only shows the
+**The gateway CDP path is an assumption.** The transcript only shows the
 `browser/upload` call; the call shape for driving methods is not published, so
 `BROWSER_CDP_PATH` is configuration rather than a guess baked into the code.
 Confirm it against the running Browser Use service once the variables are
@@ -64,7 +67,7 @@ The «Публикации» screen can also queue this as a job and show the sa
 
 ## Keeping the steps honest
 
-Kept from the proven script, because these are the parts that were taken from
+Kept from the transcript, because these are the parts that were taken from
 the live site rather than assumed:
 
 * `f11` body type and `f22` phone — absent from the old field map entirely.
@@ -79,7 +82,7 @@ selector is `li.hasPhoto .photo[style*="background-image"]`. Without the quotes
 it matches nothing, the wait loop counts zero and every run fails at `0/N photos
 attached`.
 
-`f14` (month) is **not** copied from the proven script — it hardcodes `януари`
+`f14` (month) is **not** copied from the transcript — it hardcodes `януари`
 and our requirement is April.
 
 ## Tables

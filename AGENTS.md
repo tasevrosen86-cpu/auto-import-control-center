@@ -281,8 +281,18 @@ it inside the broker's own signed-in browser. There is no proxy, no remote
 browser and no Cloudflare challenge to pass, because the request is the real
 person's own session on their own IP.
 
-`src/lib/mobile_bg_options.ts` holds the mapping, **lifted from the working
-«Обяви» publisher rather than re-derived**. It is the same proven formula:
+`src/lib/mobile_bg_options.ts` holds the mapping, taken from
+`services/mobile-publisher` (the «Обяви» publisher). That module is the most
+complete mapping we have — 22 selectors, the value translations, the extras —
+but it has **never completed a live fill**: all eight of its attempts died at
+the Cloudflare interstitial, so its own code path never validated a single one
+of these values against the real form. The identifiers descend from the agent
+script in `docs/mobilebg-direct-publisher.reference.mjs`, which did publish
+listings, and the translations are character-identical to the ones that script
+used.
+
+So the mapping is **inherited, not proven**. Only the first live fill proves it,
+which is exactly what the extension exists to do.
 
 * control names `f5`..`f32`, listed in `MOBILE_BG_SELECTORS`;
 * `VALUE_ALIASES`, because Mobile.bg accepts only its own wording — «Бензин»
@@ -441,10 +451,12 @@ That is a reconstruction defect, not a site fault.
 
 ### What it proves
 
-It reached the real form and published real listings, so its identifiers are
-taken from the site rather than guessed. Ours match on `f5..f19` and the
-`actions=2` query string. It sets `f14` to `януари`; our requirement is April,
-so do not copy that value.
+It published real listings through a Browser Use AI **Agent**, driven by a
+person, not by this script. The script is the transcript of that session, which
+the operator asked the agent for afterwards. So the identifiers and the
+translations in it are observed facts from the live form — that part is solid —
+while its control flow was written down after the fact and is a reconstruction.
+The script itself has never been run end to end.
 
 ### What our publisher is missing from it
 
@@ -497,12 +509,16 @@ both why the deploy warns about a missing key and where the value already is.## 
 edit or replace `services/mobile-publisher` and does not read or write the
 `mobile_bg_*` tables. The old flow remains the fallback.
 
-The point of the second path is the transport, not the steps. The proven
-`mobilebg-direct-publisher` never met the Cloudflare challenge because it does
-not launch a browser — it is handed an already-running, already-authenticated
-Browser Use session over CDP. `src/form.mjs` keeps those steps and
-`src/session.mjs` swaps the transport, because the gateway and Playwright both
-speak CDP.
+The point of the second path is the transport, not the steps. The agent-driven
+session that published the 500 listings never met the Cloudflare challenge
+because it did not launch a browser — it drove an already-running,
+already-authenticated Browser Use session over CDP. `src/form.mjs` keeps those
+steps and `src/session.mjs` swaps the transport, because the gateway and
+Playwright both speak CDP.
+
+The reference script is not a working program: it is one session's transcript,
+and running it as-is has never been done. Treat its steps as evidence about the
+form, not as a library to execute.
 
 `browser-test` is a gate, not a formality: it reports whether the form and its
 fields are really present, and it currently answers no.

@@ -1,8 +1,12 @@
 // Reference only. Not compiled, not deployed, not bundled (tsconfig includes
 // only src/, eslint touches only ts/tsx).
 //
-// Proven script that published real Mobile.bg listings. Kept because its form
-// steps were taken from the live site instead of assumed.
+// This is a transcript of one agent-driven session, not a working program. The
+// listings were published by a Browser Use AI Agent driven by a person; the
+// operator asked the agent for the script afterwards, and this is what it gave
+// back. So the identifiers and the translations below are observed facts from
+// the live form, while the control flow was written down after the event. It
+// has never been run end to end.
 //
 // Techniques worth adopting in services/mobile-publisher:
 //   * wait for dependent lists (model after make, country after location) up to
