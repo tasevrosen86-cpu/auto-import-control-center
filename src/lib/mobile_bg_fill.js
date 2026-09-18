@@ -44,12 +44,20 @@ function fillMobileBgForm(steps, extras) {
   }
 
   // React-driven inputs ignore a plain assignment, so the native setter is used
-  // and the events the page listens for are dispatched afterwards.
+  // and the events the page listens for are dispatched afterwards. The prototype
+  // is walked rather than tested with instanceof: this code runs in the
+  // extension's isolated world, where instanceof against the page's element
+  // returns false and the wrong setter would be picked for a textarea.
   function setNativeValue(element, value) {
-    var proto = element instanceof HTMLTextAreaElement
-      ? HTMLTextAreaElement.prototype
-      : HTMLInputElement.prototype;
-    var descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+    var proto = Object.getPrototypeOf(element);
+    var descriptor = null;
+    while (proto && !descriptor) {
+      descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+      if (!descriptor || !descriptor.set) {
+        descriptor = null;
+        proto = Object.getPrototypeOf(proto);
+      }
+    }
     if (descriptor && descriptor.set) descriptor.set.call(element, value);
     element.dispatchEvent(new Event('input', { bubbles: true }));
     element.dispatchEvent(new Event('change', { bubbles: true }));
