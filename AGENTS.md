@@ -86,6 +86,13 @@ npm run build        # vite build, output in dist/
 cd services/mobile-publisher && npm run test   # Playwright form-filling tests
 ```
 
+Run the scripts, never a bare `npx tsc --noEmit`. The root `tsconfig.json` is a
+solution file whose only content is an empty `files` list, so plain `tsc`
+resolves it, checks zero files and exits 0 for any input — including a module
+with no imports at all. A green bare-tsc run means nothing. `npm run typecheck`
+and the project-wide `tsc -b` inside `build` and `lint` read `tsconfig.app.json`
+and do report real errors.
+
 The publisher has no build step; it runs through `tsx`. Its typecheck is:
 
 ```bash
