@@ -274,6 +274,38 @@ a colour. `Цвят` is a `select` whose options are `['Бял','Черен',...
 value cannot be chosen in the Mobile.bg form at all. The sheet makes the defect
 visible before publication instead of after, which is the point of building it.
 
+## The extension is the path that avoids the challenge entirely
+
+«Екстеншън» builds a small JavaScript assistant from the selected draft and runs
+it inside the broker's own signed-in browser. There is no proxy, no remote
+browser and no Cloudflare challenge to pass, because the request is the real
+person's own session on their own IP.
+
+`src/lib/mobile_bg_options.ts` holds the mapping, **lifted from the working
+«Обяви» publisher rather than re-derived**. It is the same proven formula:
+
+* control names `f5`..`f32`, listed in `MOBILE_BG_SELECTORS`;
+* `VALUE_ALIASES`, because Mobile.bg accepts only its own wording — «Бензин»
+  must arrive as «Бензинов», «Използван» as «Употребяван», «Април» as «април»;
+* `EXTRA_ALIASES` for the equipment checkboxes («ABS» → «Антиблокираща система»);
+* `LOCATION_ALIASES` plus `COUNTRY_CANDIDATES`, because Mobile.bg splits the
+  origin across two lists: `f18` is the market area and `f19` the country, while
+  the draft stores them joined as «Извън страната → Канада».
+
+Three things that are easy to get wrong here:
+
+* **«Заглавие» is not an f-field.** `f1` is not the title, so the generated code
+  finds the title input by its visible label instead.
+* **`f18` and `f19` depend on earlier choices.** The make list reloads the model
+  list, and the area drives the country list, so the generated code waits for
+  options to arrive rather than sleeping a fixed time. A fixed sleep loses the
+  race and reports "no matching option" while the form sits half-empty.
+* **The assistant fills; it does not submit.** The broker checks the values and
+  presses «Продължи». Submitting is left to a person on purpose.
+
+Values are emitted into the generated script with `JSON.stringify`, so a quote or
+a newline in a description cannot break out of the string and alter the code.
+
 ## Two broken deployment paths, not one
 
 ### The URL importer has no worker on the server

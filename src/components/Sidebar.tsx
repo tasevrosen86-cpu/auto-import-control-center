@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { Car, Search, Download, FileEdit, ShoppingCart, BarChart3, Activity, Users, Settings, Shield, User, LogOut, X, Menu, Rocket } from 'lucide-react';
+import { Car, Search, Download, FileEdit, ShoppingCart, BarChart3, Activity, Users, Settings, Shield, User, LogOut, X, Menu, Rocket, Puzzle } from 'lucide-react';
 
-export type Page = 'vehicles' | 'broker' | 'imports' | 'publications' | 'conflicts' | 'sales' | 'statistics' | 'jobs' | 'dashboard';
+export type Page = 'vehicles' | 'broker' | 'imports' | 'publications' | 'extension' | 'conflicts' | 'sales' | 'statistics' | 'jobs' | 'dashboard';
 export type AppMode = 'admin' | 'broker';
 
 interface SidebarProps {
@@ -17,6 +17,7 @@ const adminNav: { id: Page; label: string; icon: typeof Car }[] = [
   { id: 'broker', label: 'Търсене за клиент', icon: Search },
   { id: 'imports', label: 'Обяви', icon: Download },
   { id: 'publications', label: 'Публикации', icon: Rocket },
+  { id: 'extension', label: 'Екстеншън', icon: Puzzle },
   { id: 'conflicts', label: 'Промени', icon: FileEdit },
   { id: 'sales', label: 'Продажби', icon: ShoppingCart },
   { id: 'statistics', label: 'Статистика', icon: BarChart3 },
