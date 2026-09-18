@@ -240,6 +240,40 @@ provider with a sticky session, because the persistent profile and its
 clearance cookie are bound to the IP: rotating IPs invalidate the cookie and
 force the challenge again on every run.
 
+## The prepared sheet hands the draft to the broker
+
+«Публикации» now reads an existing draft and shows its fields in the order
+Mobile.bg asks for them, with a copy button and a button that opens the form.
+Nothing is written, no draft is created, and the old «Обяви» flow is untouched.
+
+The handover is the **clipboard**, not a URL parameter. A browser will not
+pre-fill a form on another site, and injecting into it would be blocked, so the
+sheet goes over as text the broker pastes into the form they already have open.
+
+Two facts about the schema that cost time to learn:
+
+* `mobile_bg_drafts` has **no `make`, `model` or `model_year` columns**. The
+  draft row carries `title` and the metadata; every car attribute lives in
+  `mobile_bg_draft_fields` as rows keyed by `field_key`. A query selecting
+  `make` from the drafts table fails with `400`.
+* `mobile_bg_field_map.ts` marks **15 fields `agent_can_fill: false`** and
+  **75 as `needs_human_confirmation: true`**. That is why the sheet labels each
+  row «брокер» or «извлечено»: condition, price and the final description are
+  decisions, not extractions. The split is deliberate and should stay.
+
+### A real extraction defect this surfaced
+
+Read from the live draft `dbaf94c2` („Audi A3 2017“), 36 field rows, 31 filled:
+
+```
+Цвят   (Цвят)              →  "and Upholstery"
+```
+
+The colour field holds a fragment of an English AutoTrader sentence rather than
+a colour. `Цвят` is a `select` whose options are `['Бял','Черен',...]`, so this
+value cannot be chosen in the Mobile.bg form at all. The sheet makes the defect
+visible before publication instead of after, which is the point of building it.
+
 ## Two broken deployment paths, not one
 
 ### The URL importer has no worker on the server

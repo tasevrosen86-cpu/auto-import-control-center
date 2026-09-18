@@ -1,8 +1,19 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Rocket, Play, FlaskConical, ExternalLink, RefreshCw, AlertTriangle } from 'lucide-react';
+import { Rocket, Play, FlaskConical, ExternalLink, RefreshCw, AlertTriangle, ClipboardCopy, Check, FileText } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { Badge } from '@/components/Badge';
 import { formatDateTime } from '@/lib/format';
+import { buildSheet, missingInSheet, sheetAsText, type SheetRow } from '@/lib/publication_sheet';
+import type { MobileBgDraftField } from '@/types';
+
+const FORM_URL = 'https://www.mobile.bg/pcgi/mobile.cgi?pubtype=1&act=6&subact=4&actions=1';
+
+type DraftOption = {
+  id: string;
+  title: string | null;
+  status: string;
+  created_at: string;
+};
 
 type PublicationJob = {
   id: string;
@@ -52,6 +63,11 @@ export function Publications() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState<DraftOption[]>([]);
+  const [selectedId, setSelectedId] = useState('');
+  const [sheet, setSheet] = useState<SheetRow[]>([]);
+  const [sheetBusy, setSheetBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const load = useCallback(async () => {
     const { data, error: loadError } = await supabase
@@ -64,7 +80,35 @@ export function Publications() {
     setLoading(false);
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  const loadDrafts = useCallback(async () => {
+    const { data } = await supabase
+      .from('mobile_bg_drafts')
+      .select('id,title,status,created_at')
+      .order('created_at', { ascending: false })
+      .limit(50);
+    const options = (data || []) as DraftOption[];
+    setDrafts(options);
+    setSelectedId(current => current || options[0]?.id || '');
+  }, []);
+
+  // The sheet is read from the draft that already exists. Nothing is created
+  // here and nothing is written back: this screen only shows what the draft
+  // holds, so the broker can carry it into the Mobile.bg form.
+  const loadSheet = useCallback(async (draftId: string) => {
+    if (!draftId) { setSheet([]); return; }
+    setSheetBusy(true);
+    const { data, error: sheetError } = await supabase
+      .from('mobile_bg_draft_fields')
+      .select('*')
+      .eq('draft_id', draftId);
+    setSheetBusy(false);
+    if (sheetError) { setError(`Полетата не се заредиха: ${sheetError.message}`); setSheet([]); return; }
+    setSheet(buildSheet((data || []) as MobileBgDraftField[]));
+  }, []);
+
+  useEffect(() => { void load(); void loadDrafts(); }, [load, loadDrafts]);
+
+  useEffect(() => { if (selectedId) void loadSheet(selectedId); }, [selectedId, loadSheet]);
 
   useEffect(() => {
     const timer = setInterval(() => { void load(); }, 10000);
@@ -82,6 +126,30 @@ export function Publications() {
     if (insertError) { setError(`Задачата не беше създадена: ${insertError.message}`); return; }
     setNotice(`Задачата „${ACTION_LABELS[action]}“ е на опашка. Работникът ще я поеме при следващия цикъл.`);
     void load();
+  }
+
+  const selectedDraft = drafts.find(draft => draft.id === selectedId);
+  // The draft row carries only a title; make and model live in the field rows,
+  // so the heading is read from the sheet rather than from the draft.
+  const title = selectedDraft?.title
+    || [sheet.find(row => row.key === 'make')?.value, sheet.find(row => row.key === 'model')?.value]
+      .filter(Boolean).join(' ')
+    || 'Чернова';
+  const missing = missingInSheet(sheet);
+
+  // The clipboard, not a URL parameter. Browsers refuse to pre-fill a form on
+  // another site, and injecting into it would be blocked anyway, so the sheet
+  // is handed over as text the broker pastes into the open Mobile.bg form.
+  async function copySheet() {
+    const text = sheetAsText(sheet, title);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setNotice(`Листът за „${title}“ е копиран. Отвори формата на Mobile.bg и го постави.`);
+      setTimeout(() => setCopied(false), 2500);
+    } catch {
+      setError('Копирането не беше разрешено от браузъра. Отвори листа и го копирай ръчно.');
+    }
   }
 
   return <div className="space-y-4">
@@ -102,7 +170,7 @@ export function Publications() {
         className="flex items-center gap-1.5 rounded-md bg-slate-800 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-700 disabled:opacity-50">
         <FlaskConical className="h-3.5 w-3.5" /> Тествай браузър
       </button>
-      <a href="https://www.mobile.bg/pcgi/mobile.cgi?pubtype=1&act=6&subact=4&actions=1" target="_blank" rel="noreferrer"
+      <a href={FORM_URL} target="_blank" rel="noreferrer"
         className="flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">
         <ExternalLink className="h-3.5 w-3.5" /> Отвори Mobile.bg
       </a>
@@ -120,6 +188,90 @@ export function Publications() {
 
     {notice && <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">{notice}</div>}
     {error && <div className="flex items-start gap-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> {error}</div>}
+
+    <section className="rounded-lg border border-slate-200 bg-white">
+      <header className="flex flex-wrap items-end justify-between gap-2 border-b border-slate-100 px-3 py-2.5">
+        <div>
+          <h2 className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
+            <FileText className="h-3.5 w-3.5" /> Подготвен лист за попълване
+          </h2>
+          <p className="mt-0.5 text-[11px] text-slate-500">
+            Данните идват от вече готова чернова. Копирай ги, отвори формата на Mobile.bg и ги постави там.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <select value={selectedId} onChange={event => setSelectedId(event.target.value)}
+            className="h-8 max-w-[280px] rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-blue-400">
+            {drafts.length === 0 && <option value="">Няма чернови</option>}
+            {drafts.map(draft => (
+              <option key={draft.id} value={draft.id}>
+                {draft.title || draft.id.slice(0, 8)}
+              </option>
+            ))}
+          </select>
+          <button onClick={() => void loadSheet(selectedId)} disabled={!selectedId || sheetBusy}
+            className="flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">
+            <RefreshCw className="h-3.5 w-3.5" /> Презареди
+          </button>
+          <button onClick={() => void copySheet()} disabled={!sheet.length}
+            className="flex h-8 items-center gap-1.5 rounded-md bg-emerald-600 px-2.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">
+            {copied ? <Check className="h-3.5 w-3.5" /> : <ClipboardCopy className="h-3.5 w-3.5" />}
+            {copied ? 'Копирано' : 'Копирай листа'}
+          </button>
+          <a href={FORM_URL} target="_blank" rel="noreferrer"
+            className="flex h-8 items-center gap-1.5 rounded-md bg-slate-800 px-2.5 text-xs font-semibold text-white hover:bg-slate-700">
+            <ExternalLink className="h-3.5 w-3.5" /> Отвори формата
+          </a>
+        </div>
+      </header>
+
+      {sheetBusy && <p className="px-3 py-6 text-center text-xs text-slate-400">Зареждане на полетата…</p>}
+      {!sheetBusy && sheet.length === 0 && (
+        <p className="px-3 py-6 text-center text-xs text-slate-400">
+          Избери чернова. Ако списъкът е празен, първо създай чернова в секция „Обяви“.
+        </p>
+      )}
+      {!sheetBusy && sheet.length > 0 && (
+        <>
+          {missing.length > 0 && (
+            <div className="flex items-start gap-2 border-b border-amber-100 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>
+                Още {missing.length} задължителни полета са празни: {missing.map(row => row.label).join(', ')}.
+                Попълни ги в „Обяви“, преди да публикуваш.
+              </span>
+            </div>
+          )}
+          <table className="w-full text-left text-xs">
+            <thead className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-500">
+              <tr>
+                <th className="px-3 py-2 font-semibold">Поле в Mobile.bg</th>
+                <th className="px-3 py-2 font-semibold">Стойност</th>
+                <th className="px-3 py-2 font-semibold">Кой решава</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sheet.map(row => (
+                <tr key={row.key} className="border-t border-slate-100">
+                  <td className="px-3 py-1.5 text-slate-600">
+                    {row.label}
+                    {row.required && <span className="ml-1 text-rose-500">*</span>}
+                  </td>
+                  <td className={`px-3 py-1.5 ${row.value ? 'font-medium text-slate-800' : 'text-slate-400'}`}>
+                    {row.value || 'празно'}
+                  </td>
+                  <td className="px-3 py-1.5">
+                    {row.human
+                      ? <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800">брокер</span>
+                      : <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">извлечено</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </section>
 
     <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">
       <table className="w-full text-left text-xs">
