@@ -1,151 +1,3 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Chrome, ClipboardCopy, Check, Download, ExternalLink, Puzzle, RefreshCw, ShieldCheck } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
-import { buildMobileBgPlan, type FillPlan } from '@/lib/mobile_bg_options';
-import type { MobileBgDraftExtra, MobileBgDraftField } from '@/types';
-
-const FORM_URL = 'https://www.mobile.bg/pcgi/mobile.cgi?pubtype=1&act=6&subact=4&actions=1';
-
-type DraftOption = {
-  id: string;
-  title: string | null;
-  status: string;
-};
-
-// The extension is built from this page at request time: the mapping already
-// lives in the app, so the download carries the same one the sheet shows and
-// there is no second copy to drift.
-function buildExtensionSource(plan: FillPlan) {
-  const steps = JSON.stringify(plan.steps);
-  const extras = JSON.stringify(plan.extras);
-  return `// AICC Mobile.bg assistant, generated for one draft.
-// It runs inside the broker's own signed-in browser, so there is no proxy,
-// no remote browser and no challenge to pass: the request looks like the
-// person it belongs to, because it is.
-(function () {
-  const STEPS = ${steps};
-  const EXTRAS = ${extras};
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-  const normalize = (value) => String(value || '')
-    .replace(/\\s+/g, ' ').trim().replace(/[.\\s]+$/, '').toLocaleLowerCase('bg');
-
-  function byName(name) {
-    return document.querySelector('[name="' + name + '"]');
-  }
-
-  async function waitForOptions(select, minimum = 2, timeoutMs = 10000) {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      if (select.options.length >= minimum) return true;
-      await sleep(250);
-    }
-    return false;
-  }
-
-  function setNativeValue(element, value) {
-    const proto = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-    Object.getOwnPropertyDescriptor(proto, 'value').set.call(element, value);
-    element.dispatchEvent(new Event('input', { bubbles: true }));
-    element.dispatchEvent(new Event('change', { bubbles: true }));
-  }
-
-  async function selectByText(select, wanted) {
-    if (!await waitForOptions(select)) return false;
-    const target = normalize(wanted);
-    const option = Array.from(select.options).find((o) => normalize(o.textContent) === target);
-    if (!option) return false;
-    select.value = option.value;
-    select.dispatchEvent(new Event('change', { bubbles: true }));
-    return true;
-  }
-
-  function findTitleInput() {
-    const labels = Array.from(document.querySelectorAll('label, td, b, strong'));
-    for (const node of labels) {
-      if (normalize(node.textContent) !== 'заглавие') continue;
-      const forId = node.getAttribute && node.getAttribute('for');
-      if (forId) { const linked = document.getElementById(forId); if (linked) return linked; }
-      const nested = node.querySelector('input, textarea');
-      if (nested) return nested;
-      const next = node.parentElement && node.parentElement.querySelector('input, textarea');
-      if (next) return next;
-    }
-    return null;
-  }
-
-  function findCheckboxByLabel(text) {
-    const target = normalize(text);
-    for (const label of Array.from(document.querySelectorAll('label'))) {
-      if (normalize(label.textContent) !== target) continue;
-      const nested = label.querySelector('input[type="checkbox"]');
-      if (nested) return nested;
-      const forId = label.getAttribute('for');
-      if (forId) { const linked = document.getElementById(forId); if (linked) return linked; }
-    }
-    return null;
-  }
-
-  async function run() {
-    const report = { filled: [], skipped: [] };
-    if (!byName('f5')) {
-      report.error = 'Формата не е намерена. Отвори формата за нова обява и влез в профила си, после опитай пак.';
-      return report;
-    }
-    for (const step of STEPS) {
-      try {
-        if (step.label === 'title') {
-          const input = findTitleInput();
-          if (!input) { report.skipped.push([step.label, 'Полето не е намерено']); continue; }
-          setNativeValue(input, step.value);
-          report.filled.push(step.label);
-          continue;
-        }
-        const control = byName(step.selector);
-        if (!control) { report.skipped.push([step.label, 'Полето липсва']); continue; }
-        if (step.kind === 'select') {
-          if (!await selectByText(control, step.value)) { report.skipped.push([step.label, step.value]); continue; }
-          // «Марка» and «Област» drive lists that reload after them.
-          if (['make', 'location', 'country'].includes(step.label)) await sleep(600);
-        } else {
-          setNativeValue(control, step.value);
-        }
-        report.filled.push(step.label);
-      } catch (error) {
-        report.skipped.push([step.label, String(error && error.message || error)]);
-      }
-    }
-    for (const label of EXTRAS) {
-      const box = findCheckboxByLabel(label);
-      if (!box) { report.skipped.push(['extra:' + label, 'Няма такъв екстра']); continue; }
-      if (!box.checked) box.click();
-      report.filled.push('extra:' + label);
-    }
-    return report;
-  }
-
-  const existing = document.getElementById('aicc-report');
-  if (existing) existing.remove();
-  const panel = document.createElement('div');
-  panel.id = 'aicc-report';
-  panel.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483647;max-width:340px;padding:12px 14px;border-radius:10px;background:#0f172a;color:#e2e8f0;font:12px/1.5 system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.4)';
-  panel.textContent = 'Попълвам…';
-  document.body.appendChild(panel);
-  run().then((report) => {
-    const lines = [];
-    if (report.error) lines.push(report.error);
-    lines.push('Попълнени: ' + report.filled.length);
-    if (report.skipped.length) {
-      lines.push('Пропуснати (' + report.skipped.length + '):');
-      for (const [key, why] of report.skipped.slice(0, 8)) lines.push('  ' + key + ' — ' + why);
-    }
-    lines.push('Провери стойностите и натисни «Продължи» сам.');
-    panel.textContent = lines.join('\\n');
-    panel.style.whiteSpace = 'pre-wrap';
-  });
-})();`;
-}
-
 export function Extension() {
   const [drafts, setDrafts] = useState<DraftOption[]>([]);
   const [selectedId, setSelectedId] = useState('');
@@ -185,20 +37,18 @@ export function Extension() {
 
   useEffect(() => { void loadPlan(selectedId); }, [selectedId, loadPlan]);
 
-  const source = useMemo(() => (plan ? buildExtensionSource(plan) : ''), [plan]);
+  const payload = useMemo<DraftPayload | null>(() => (
+    plan ? { title: plan.title, steps: plan.steps, extras: plan.extras } : null
+  ), [plan]);
 
-  function download() {
-    const blob = new Blob([source], { type: 'text/javascript' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = 'aicc-mobile-bg.js';
-    link.click();
-    URL.revokeObjectURL(url);
+  function downloadZip() {
+    if (!payload) return;
+    downloadExtension(buildExtensionZip(payload), payload.title);
   }
 
-  async function copy() {
-    await navigator.clipboard.writeText(source);
+  async function copyScript() {
+    if (!payload) return;
+    await navigator.clipboard.writeText(buildUserscript(payload));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
@@ -210,9 +60,9 @@ export function Extension() {
           <Puzzle className="h-4 w-4 text-blue-600" /> Екстеншън
         </h1>
         <p className="mt-1 max-w-3xl text-[11px] leading-relaxed text-slate-500">
-          Помощник, който работи в твоя браузър, на твоя профил. Няма прокси, няма отдалечен браузър,
-          няма проверка, която да минаваме — защото това е истинската сесия. Извлечените данни се
-          попълват директно във формата.
+          Истинска екстеншън за Chrome, която се инсталира веднъж и после само натискаш иконата.
+          Работи в твоя браузър, на твоя профил — няма прокси, няма отдалечен браузър, няма проверка,
+          която да минаваме. Данните са само за избраната чернова и стоят в екстеншъна, не излизат никъде.
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -235,7 +85,7 @@ export function Extension() {
     <section className="rounded-lg border border-slate-200 bg-white">
       <header className="border-b border-slate-100 px-3 py-2.5">
         <h2 className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
-          <Download className="h-3.5 w-3.5" /> 1. Вземи помощника
+          <Chrome className="h-3.5 w-3.5" /> 1. Инсталирай екстеншъна (Chrome на компютър)
         </h2>
         <p className="mt-0.5 text-[11px] text-slate-500">
           {plan
@@ -244,28 +94,42 @@ export function Extension() {
         </p>
       </header>
       <div className="flex flex-wrap items-center gap-2 px-3 py-2.5">
-        <button onClick={download} disabled={!plan}
+        <button onClick={downloadZip} disabled={!payload}
           className="flex h-8 items-center gap-1.5 rounded-md bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50">
-          <Download className="h-3.5 w-3.5" /> Свали aicc-mobile-bg.js
-        </button>
-        <button onClick={() => void copy()} disabled={!plan}
-          className="flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">
-          {copied ? <Check className="h-3.5 w-3.5" /> : <ClipboardCopy className="h-3.5 w-3.5" />}
-          {copied ? 'Копирано' : 'Копирай кода'}
+          <Download className="h-3.5 w-3.5" /> Свали екстеншъна (.zip)
         </button>
       </div>
       <div className="border-t border-slate-100 px-3 py-2.5">
-        <h3 className="flex items-center gap-1.5 text-[11px] font-bold text-slate-600">
-          <Chrome className="h-3.5 w-3.5" /> 2. Зареди го в браузъра
-        </h3>
-        <ol className="mt-1.5 list-decimal space-y-1 pl-4 text-[11px] text-slate-500">
+        <ol className="list-decimal space-y-1 pl-4 text-[11px] text-slate-500">
+          <li>Разархивирай папката (не я мести после).</li>
           <li>Отвори <code className="rounded bg-slate-100 px-1">chrome://extensions</code> и включи „Режим за разработчици“.</li>
-          <li>Натисни „Зареди неопаковано“ и избери папка с файла <code className="rounded bg-slate-100 px-1">aicc-mobile-bg.js</code>.</li>
+          <li>Натисни „Зареди неопаковано“ и избере папката.</li>
           <li>Отвори формата за нова обява и влез в профила си.</li>
-          <li>Отвори конзолата (F12), постави кода и натисни Enter.</li>
+          <li>Натисни иконата на AICC в лентата — полетата се попълват.</li>
         </ol>
+        <p className="mt-2 text-[11px] text-slate-400">
+          Екстеншънът вижда само <code className="rounded bg-slate-100 px-1">mobile.bg</code>. Не изпраща обявата —
+          ти преглеждаш и натискаш „Продължи“.
+        </p>
       </div>
-      <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 px-3 py-2.5">
+    </section>
+
+    <section className="rounded-lg border border-slate-200 bg-white">
+      <header className="border-b border-slate-100 px-3 py-2.5">
+        <h2 className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
+          <Smartphone className="h-3.5 w-3.5" /> 2. От телефон — userscript
+        </h2>
+        <p className="mt-0.5 text-[11px] leading-relaxed text-slate-500">
+          Chrome на Android <b>не поддържа</b> екстеншъни — това е ограничение на Chrome, не на нас.
+          За телефон ползвай браузър с userscript (Firefox с Tampermonkey, Kiwi, Brave).
+        </p>
+      </header>
+      <div className="flex flex-wrap items-center gap-2 px-3 py-2.5">
+        <button onClick={() => void copyScript()} disabled={!payload}
+          className="flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">
+          {copied ? <Check className="h-3.5 w-3.5" /> : <ClipboardCopy className="h-3.5 w-3.5" />}
+          {copied ? 'Копиран' : 'Копирай userscript'}
+        </button>
         <a href={FORM_URL} target="_blank" rel="noreferrer"
           className="flex h-8 items-center gap-1.5 rounded-md bg-slate-800 px-3 text-xs font-semibold text-white hover:bg-slate-700">
           <ExternalLink className="h-3.5 w-3.5" /> Отвори формата на Mobile.bg
