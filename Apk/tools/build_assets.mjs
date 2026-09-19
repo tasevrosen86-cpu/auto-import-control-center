@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..', '..');
-const assets = resolve(root, 'android', 'app', 'src', 'main', 'assets');
+const assets = resolve(root, 'Apk', 'app', 'src', 'main', 'assets');
 
 await mkdir(assets, { recursive: true });
 

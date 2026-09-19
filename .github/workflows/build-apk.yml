@@ -11,10 +11,10 @@ on:
   push:
     branches: [main]
     paths:
-      - 'android/**'
+      - 'Apk/**'
       - 'src/lib/mobile_bg_options.ts'
       - 'src/lib/mobile_bg_fill.js'
-      - '.github/workflows/build-android.yml'
+      - '.github/workflows/build-apk.yml'
 
 permissions:
   contents: read
@@ -45,22 +45,22 @@ jobs:
       # The mapping and the fill routine are taken from the repository sources,
       # not retyped here, so the APK cannot drift from the web app.
       - name: Build embedded assets
-        run: npm run android:assets
+        run: npm run apk:assets
 
       - name: Generate launcher icons
-        run: python3 android/tools/make_icons.py
+        run: python3 Apk/tools/make_icons.py
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
       - name: Build release APK
-        working-directory: android
+        working-directory: Apk
         run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
 
       - name: Rename the APK
         run: |
           mkdir -p artifacts
-          cp android/app/build/outputs/apk/release/app-release.apk \
+          cp Apk/app/build/outputs/apk/release/app-release.apk \
              artifacts/aicc-mobile.apk
           ls -la artifacts
 

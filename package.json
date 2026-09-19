@@ -9,7 +9,7 @@
     "lint": "tsc -b && eslint .",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.app.json",
-    "android:assets": "node android/tools/build_assets.mjs"
+    "apk:assets": "node Apk/tools/build_assets.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",

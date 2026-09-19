@@ -549,22 +549,24 @@ function is rewritten; `form.mjs` stays as it is.
 
 ## AICC Mobile is a third, standalone path
 
-`android/` holds a real installable Android app. It exists because Mobile.bg
+`Apk/` holds a real installable Android app. It exists because Mobile.bg
 cannot be reached from the build or CI environment at all: every request from
 here, and from a real browser, returns HTTP 403. The phone is a network that
 Mobile.bg does accept, so the app is the transport rather than another attempt
 at the same wall.
 
+Its JavaScript is not a second implementation. `Apk/tools/build_assets.mjs`
+bundles `src/lib/mobile_bg_options.ts` for the field mapping and copies
+`src/lib/mobile_bg_fill.js` verbatim for the fill routine. Change either source
+and the app changes with it; the fill file is not edited to add an export, the
+export line is appended by the build instead. Those two files stay in `src/lib/`
+on purpose: the web app uses them too (`Extension.tsx` and `extension_build.ts`),
+so moving them would fork the mapping the app exists to share.
+
 The app opens Mobile.bg's own publish form in a WebView and fills it while the
 operator watches. It does not defeat a bot check and does not run headless: the
 account stays a normal account, and pressing «ПРОДЪЛЖИ» is left to the operator
 because the listing carries their phone number.
-
-Its JavaScript is not a second implementation. `android/tools/build_assets.mjs`
-bundles `src/lib/mobile_bg_options.ts` for the field mapping and copies
-`src/lib/mobile_bg_fill.js` verbatim for the fill routine. Change either source
-and the app changes with it; the fill file is not edited to add an export, the
-export line is appended by the build instead.
 
 The mapping is `f5` make, `f6` model, `f8` fuel, `f9` power, `f10` gearbox,
 `f11` body, `f12` price, `f13` currency, `f14` month, `f15` year, `f16` mileage,
@@ -578,7 +580,12 @@ means the body style, while the `category` field is the fixed ad section
 `resolveBodyType` (`mobile_bg_options.ts`, mirrored in `mobile-publisher` and
 `publications-publisher`, which are standalone and do not import from `src/`).
 
-Build it with `node android/tools/build_assets.mjs` then
-`cd android && ./gradlew :app:assembleRelease`, or run the `build-android`
+Build it with `npm run apk:assets` then
+`cd Apk && ./gradlew :app:assembleRelease`, or run the `build-apk`
 workflow, which attaches the APK as an artifact so it can be installed from the
 phone without a cable. Assets and icons are generated, so they are gitignored.
+
+Locally the build needs JDK 21 and an Android SDK with `platforms;android-35`
+and `build-tools;35.0.0`; `Apk/local.properties` points Gradle at the SDK and is
+gitignored. The Gradle wrapper pins 8.10.2 and the Android Gradle Plugin 8.7.3,
+the same pair CI uses, so a local build and a CI build produce the same APK.

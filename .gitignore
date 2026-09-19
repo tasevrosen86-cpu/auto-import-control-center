@@ -4,15 +4,15 @@ dist
 *.local
 *.tsbuildinfo
 
-# Android build output. The APK is produced by the build-android workflow and
+# Android build output. The APK is produced by the build-apk workflow and
 # attached as an artifact, so nothing generated belongs in the tree.
-android/.gradle
-android/build
-android/app/build
-android/local.properties
+Apk/.gradle
+Apk/build
+Apk/app/build
+Apk/local.properties
 # Local APK drop for sideloading during a live test. Built, never committed.
 artifacts/
-android/app/src/main/assets/plan.js
-android/app/src/main/assets/fill.js
-android/app/src/main/assets/combined.js
-android/app/src/main/res/mipmap-*/ic_launcher*.png
+Apk/app/src/main/assets/plan.js
+Apk/app/src/main/assets/fill.js
+Apk/app/src/main/assets/combined.js
+Apk/app/src/main/res/mipmap-*/ic_launcher*.png
