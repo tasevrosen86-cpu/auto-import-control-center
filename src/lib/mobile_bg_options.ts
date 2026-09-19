@@ -175,6 +175,12 @@ export function buildMobileBgPlan(fields: MobileBgDraftField[], extras: MobileBg
   if (title) steps.push({ selector: 'title', value: title, kind: 'input', label: 'title', translated: false });
   const description = values.get('final_description') || values.get('description') || '';
   if (description) steps.push({ selector: MOBILE_BG_TEXT_SELECTORS.description, value: description, kind: 'textarea', label: 'description', translated: false });
+  // f22 is the contact phone and Mobile.bg will not accept step 1 without it. It
+  // lives in MOBILE_BG_TEXT_SELECTORS, which the loop above never iterates, so it
+  // has to be pushed here: leaving it out silently produced a form that reported
+  // success and still failed validation.
+  const phone = values.get('phone') || '';
+  if (phone) steps.push({ selector: MOBILE_BG_TEXT_SELECTORS.phone, value: phone, kind: 'input', label: 'phone', translated: false });
 
   const derived: string[] = [
     values.get('drivetrain') === '4x4' ? '4x4' : '',
@@ -189,7 +195,10 @@ export function buildMobileBgPlan(fields: MobileBgDraftField[], extras: MobileBg
     ...derived,
   ])];
 
-  for (const key of ['make', 'model', 'price', 'currency', 'condition', 'fuel', 'gearbox', 'year', 'mileage']) {
+  // «phone» is checked here because Mobile.bg rejects step 1 without it, and it
+  // was previously absent from the plan entirely: a draft missing it looked
+  // complete right up to the validation error on the second step.
+  for (const key of ['make', 'model', 'price', 'currency', 'condition', 'fuel', 'gearbox', 'year', 'mileage', 'phone']) {
     if (!steps.some(step => step.label === key)) missing.push(key);
   }
 

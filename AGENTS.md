@@ -465,11 +465,18 @@ translations in it are observed facts from the live form — that part is solid 
 while its control flow was written down after the fact and is a reconstruction.
 The script itself has never been run end to end.
 
-### What our publisher is missing from it
+### What our publisher was missing from it
 
 * `f11` — body type (`Джип`, `Пикап`, `Седан`, `Ван` …), which our
-  `FIELD_SELECTORS` omits entirely.
-* `f22` — the contact phone, hardcoded as `0887353653`.
+  `FIELD_SELECTORS` omitted entirely. Now filled.
+* `f22` — the contact phone, hardcoded as `0887353653`. This one was missing
+  from three places at once: `MOBILE_BG_SELECTORS` never held it (it sat unused
+  in `MOBILE_BG_TEXT_SELECTORS`), the WebView plan never pushed it, and
+  `FIELD_SELECTORS` in `mobile-publisher` did not name it either. So the field
+  arrived empty on step 2 and Mobile.bg rejected the step, while every report
+  said the fill succeeded. It is now a step in the plan, a strict field in both
+  publishers, and covered by a test scenario that fails if it goes missing
+  again.
 * Submitting step 1 programmatically with
   `Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(f.elements.actions, '2')`
   then `HTMLFormElement.prototype.submit.call(f)`, instead of hunting for a

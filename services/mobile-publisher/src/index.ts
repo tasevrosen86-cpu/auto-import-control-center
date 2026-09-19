@@ -35,6 +35,10 @@ const FIELD_SELECTORS: Record<string, string> = {
   // the location on purpose: choosing it reloads the area and country lists.
   body_type: '[name="f11"]',
   location: '[name="f18"]', country: '[name="f19"]', vin: '[name="f32"]',
+  // f22 is the contact phone. Mobile.bg refuses step 1 without it, and it was
+  // missing from this map, so every run reached the second step with the field
+  // untouched and reported success.
+  phone: '[name="f22"]',
 };
 
 // Mobile.bg splits the origin in two: f18 is the market area and f19 is the
@@ -54,7 +58,7 @@ const COUNTRY_CANDIDATES: Array<[string, string[]]> = [
 // Everything else — colour, modification, extras, the Canada-only additions and
 // the VIN — stays optional and is reported without blocking.
 const STRICT_FIELDS = (process.env.MOBILE_BG_STRICT_FIELDS
-  || 'title,make,model,body_type,price,currency,condition,fuel,gearbox,year,mileage,location,country')
+  || 'title,make,model,body_type,price,currency,condition,fuel,gearbox,year,mileage,location,country,phone')
   .split(',').map(key => key.trim()).filter(Boolean);
 const VALUE_ALIASES: Record<string, Record<string, string>> = {
   fuel: { Бензин: 'Бензинов', Дизел: 'Дизелов', Хибрид: 'Хибриден', 'Газ (LPG)': 'Газ' },

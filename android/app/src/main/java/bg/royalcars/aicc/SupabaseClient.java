@@ -120,6 +120,21 @@ final class SupabaseClient {
                 + "&draft_id=eq." + draftId + "&order=field_key", null);
     }
 
+    /**
+     * Queues a source listing link for extraction and returns the draft it made.
+     *
+     * The fetching is not done here. It runs on the server, where a real browser
+     * reaches Encar and AutoTrader — this is the separate URL importer, and it has
+     * nothing to do with the Mobile.bg form on the phone. The edge function needs
+     * the signed-in user, not the anon key, so this call is authenticated.
+     */
+    JSONObject queueSourceIntake(String sourceUrl) throws Exception {
+        JSONObject body = new JSONObject()
+                .put("source_url", sourceUrl)
+                .put("intake_origin", "LINK_FIELD");
+        return request("POST", "/functions/v1/queue-source-intake", body.toString(), true);
+    }
+
     JSONArray draftExtras(String draftId) throws Exception {
         return requestArray("GET",
                 "/rest/v1/mobile_bg_draft_extras?select=extra_key,mobile_bg_label,selected"

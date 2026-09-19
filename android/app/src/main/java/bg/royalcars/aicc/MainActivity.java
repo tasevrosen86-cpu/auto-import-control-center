@@ -124,6 +124,43 @@ public class MainActivity extends Activity {
         TextView message = note("Зареждам…");
         column.addView(message);
 
+        // The URL importer: a separate entry point from the Mobile.bg form. A link
+        // is queued here and a real browser on the server opens the listing and
+        // turns it into the same normalised draft the catalog path produces. It is
+        // not a Mobile.bg link and never opens the publish form.
+        EditText link = new EditText(this);
+        link.setHint("Линк към обява (Encar или AutoTrader)");
+        link.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        column.addView(link);
+
+        Button importLink = button("Извлечи от линка");
+        TextView importMessage = note("");
+        importLink.setOnClickListener(view -> {
+            String sourceUrl = link.getText().toString().trim();
+            if (sourceUrl.isEmpty()) {
+                importMessage.setText("Постави линк към обявата.");
+                return;
+            }
+            importLink.setEnabled(false);
+            importMessage.setText("Изпращам линка за извличане…");
+            worker.execute(() -> {
+                try {
+                    JSONObject queued = supabase.queueSourceIntake(sourceUrl);
+                    runOnUiThread(() -> {
+                        importMessage.setText("Черновата е създадена. Отвори я след извличането.");
+                        showDraftList();
+                    });
+                } catch (Exception error) {
+                    runOnUiThread(() -> {
+                        importMessage.setText("Не приех линка: " + error.getMessage());
+                        importLink.setEnabled(true);
+                    });
+                }
+            });
+        });
+        column.addView(importLink);
+        column.addView(importMessage);
+
         Button refresh = button("Презареди");
         refresh.setOnClickListener(view -> showDraftList());
         column.addView(refresh);
