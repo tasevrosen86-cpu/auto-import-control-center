@@ -45,7 +45,7 @@ jobs:
       # The mapping and the fill routine are taken from the repository sources,
       # not retyped here, so the APK cannot drift from the web app.
       - name: Build embedded assets
-        run: node android/tools/build_assets.mjs
+        run: npm run android:assets
 
       - name: Generate launcher icons
         run: python3 android/tools/make_icons.py
