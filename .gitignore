@@ -10,6 +10,8 @@ android/.gradle
 android/build
 android/app/build
 android/local.properties
+# Local APK drop for sideloading during a live test. Built, never committed.
+artifacts/
 android/app/src/main/assets/plan.js
 android/app/src/main/assets/fill.js
 android/app/src/main/assets/combined.js
