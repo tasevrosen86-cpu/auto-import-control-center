@@ -3,3 +3,14 @@ dist
 .env
 *.local
 *.tsbuildinfo
+
+# Android build output. The APK is produced by the build-android workflow and
+# attached as an artifact, so nothing generated belongs in the tree.
+android/.gradle
+android/build
+android/app/build
+android/local.properties
+android/app/src/main/assets/plan.js
+android/app/src/main/assets/fill.js
+android/app/src/main/assets/combined.js
+android/app/src/main/res/mipmap-*/ic_launcher*.png

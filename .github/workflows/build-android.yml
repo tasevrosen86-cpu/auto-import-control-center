@@ -1,0 +1,80 @@
+name: Build AICC Mobile APK
+
+# Builds the Android app and publishes the APK as a workflow artifact, so it can
+# be downloaded and installed straight from the phone without a build machine
+# and without a cable.
+#
+# Nothing is published to any store: this is an internal tool for one account.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - 'src/lib/mobile_bg_options.ts'
+      - 'src/lib/mobile_bg_fill.js'
+      - '.github/workflows/build-android.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      # The mapping and the fill routine are taken from the repository sources,
+      # not retyped here, so the APK cannot drift from the web app.
+      - name: Build embedded assets
+        run: npm run android:assets
+
+      - name: Generate launcher icons
+        run: python3 android/tools/make_icons.py
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build release APK
+        working-directory: android
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
+
+      - name: Rename the APK
+        run: |
+          mkdir -p artifacts
+          cp android/app/build/outputs/apk/release/app-release.apk \
+             artifacts/aicc-mobile.apk
+          ls -la artifacts
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: aicc-mobile-apk
+          path: artifacts/aicc-mobile.apk
+          if-no-files-found: error
+
+      - name: Summary
+        run: |
+          {
+            echo "## AICC Mobile"
+            echo ""
+            echo 'Свали `aicc-mobile.apk` от секцията Artifacts на тази страница и го инсталирай на телефона.'
+          } >> "$GITHUB_STEP_SUMMARY"

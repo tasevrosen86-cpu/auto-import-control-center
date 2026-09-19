@@ -539,3 +539,33 @@ paths as configuration (`BROWSER_CDP_PATH`, `BROWSER_UPLOAD_PATH`) instead of
 hardcoding a guess, and `send()` is the single place to change once the real
 relay is known. If the gateway does not relay arbitrary CDP methods, that one
 function is rewritten; `form.mjs` stays as it is.
+
+## AICC Mobile is a third, standalone path
+
+`android/` holds a real installable Android app. It exists because Mobile.bg
+cannot be reached from the build or CI environment at all: every request from
+here, and from a real browser, returns HTTP 403. The phone is a network that
+Mobile.bg does accept, so the app is the transport rather than another attempt
+at the same wall.
+
+The app opens Mobile.bg's own publish form in a WebView and fills it while the
+operator watches. It does not defeat a bot check and does not run headless: the
+account stays a normal account, and pressing «ПРОДЪЛЖИ» is left to the operator
+because the listing carries their phone number.
+
+Its JavaScript is not a second implementation. `android/tools/build_assets.mjs`
+bundles `src/lib/mobile_bg_options.ts` for the field mapping and copies
+`src/lib/mobile_bg_fill.js` verbatim for the fill routine. Change either source
+and the app changes with it; the fill file is not edited to add an export, the
+export line is appended by the build instead.
+
+The mapping is `f5` make, `f6` model, `f8` fuel, `f9` power, `f10` gearbox,
+`f11` body, `f12` price, `f13` currency, `f14` month, `f15` year, `f16` mileage,
+`f17` colour, `f18` area, `f19` country, `f21` description, `f22` phone,
+`f25` condition, `f31` VAT. `f11` is required by the form but is not in
+`MOBILE_BG_SELECTORS`; that gap is real and not yet closed.
+
+Build it with `node android/tools/build_assets.mjs` then
+`cd android && ./gradlew :app:assembleRelease`, or run the `build-android`
+workflow, which attaches the APK as an artifact so it can be installed from the
+phone without a cable. Assets and icons are generated, so they are gitignored.
