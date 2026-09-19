@@ -1,0 +1,6 @@
+// Root build file. The Android Gradle Plugin version is pinned because the
+// build runs on a fixed JDK 21 + Gradle 8.10.2 pair in CI and on the phone's
+// build machine; a floating version would break the reproducible APK.
+plugins {
+    id 'com.android.application' version '8.7.3' apply false
+}

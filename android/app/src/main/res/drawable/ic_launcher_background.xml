@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  A solid icon instead of a layered adaptive one: the launcher icon is not worth
+  a build variant per density, and a single drawable renders correctly on every
+  device the app is installed on.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#0f172a" />
+    <corners android:radius="12dp" />
+    <padding android:left="8dp" android:top="8dp" android:right="8dp" android:bottom="8dp" />
+</shape>

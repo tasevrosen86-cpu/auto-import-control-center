@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      A plain light theme. The app is a form tool that is used outdoors, so the
+      contrast is kept high and no dark variant is defined: one look is easier
+      to trust than two.
+    -->
+    <style name="AiccTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#f1f5f9</item>
+        <item name="android:colorAccent">#1d4ed8</item>
+        <item name="android:statusBarColor">#0f172a</item>
+    </style>
+</resources>

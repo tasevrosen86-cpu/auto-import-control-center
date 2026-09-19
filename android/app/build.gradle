@@ -1,0 +1,38 @@
+// AICC Mobile — the phone side of Mobile.bg publishing.
+//
+// The app is deliberately plain: one Activity, a WebView, and the proven field
+// map from services/publications-publisher. No SDK, no framework, no network
+// libraries beyond what Android already ships. Everything it needs to talk to
+// Supabase is in the standard library, so the dependency list stays empty and
+// the APK stays small enough to install by hand.
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'bg.royalcars.aicc'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'bg.royalcars.aicc'
+        minSdk 24
+        targetSdk 35
+        versionCode 1
+        versionName '1.0'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            // Signed with the debug key on purpose: this is an internal tool
+            // that is installed by hand, so a private upload key would only add
+            // a way to lose access to the app.
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
