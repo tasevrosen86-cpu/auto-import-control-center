@@ -31,6 +31,16 @@
   <!-- Colour and VIN are present but must stay optional. The stub offers no
        "Червен" so a missing colour can be observed without blocking. -->
   <label>Цвят <select name="f17"><option value="">-</option><option>Черен</option></select></label>
+
+  <!-- f11 is «Категория», the body style. The list is the one the live form
+       offered. Choosing it reloads the area and country lists, so it has to be
+       set before them: filling it afterwards would wipe them. -->
+  <label>Категория <select name="f11">
+    <option value="">-</option>
+    <option>Джип</option><option>Пикап</option><option>Седан</option><option>Купе</option>
+    <option>Миниван</option><option>Хечбек</option><option>Кабрио</option><option>Комби</option><option>Ван</option>
+  </select></label>
+
   <label>Място <select name="f18"><option value="">-</option><option>Извън страната</option><option>Варна</option></select></label>
   <label>VIN <input name="f32"></label>
 
@@ -55,6 +65,17 @@ const countries = {
   'Варна': ['България'],
 };
 const form = document.forms.namedItem('pub');
+
+// The real form reloads the area and country lists when the body style is
+// chosen, so the stub does too. This is what makes a wrong fill order visible:
+// setting f11 after f18/f19 clears them.
+function reloadCountries() {
+  const list = form.elements.f19;
+  if (list) { list.innerHTML = '<option value="">-</option>'; list.dataset.stale = '1'; }
+}
+
+form.elements.f11.addEventListener('change', reloadCountries);
+
 form.elements.f5.addEventListener('change', (event) => {
   const list = form.elements.f6;
   list.innerHTML = '<option value="">-</option>';

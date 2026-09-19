@@ -562,8 +562,14 @@ export line is appended by the build instead.
 The mapping is `f5` make, `f6` model, `f8` fuel, `f9` power, `f10` gearbox,
 `f11` body, `f12` price, `f13` currency, `f14` month, `f15` year, `f16` mileage,
 `f17` colour, `f18` area, `f19` country, `f21` description, `f22` phone,
-`f25` condition, `f31` VAT. `f11` is required by the form but is not in
-`MOBILE_BG_SELECTORS`; that gap is real and not yet closed.
+`f25` condition, `f31` VAT. `f11` is the body style and is now mapped; it must
+be filled **before** `f18`/`f19`, because choosing it reloads the area and
+country lists and would otherwise clear them. Its value comes from the
+`body_type` draft field, never from `category`: «Категория» on the publish form
+means the body style, while the `category` field is the fixed ad section
+«Автомобили и джипове», and the two never match. The mapping lives in
+`resolveBodyType` (`mobile_bg_options.ts`, mirrored in `mobile-publisher` and
+`publications-publisher`, which are standalone and do not import from `src/`).
 
 Build it with `node android/tools/build_assets.mjs` then
 `cd android && ./gradlew :app:assembleRelease`, or run the `build-android`

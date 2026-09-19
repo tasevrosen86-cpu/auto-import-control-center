@@ -25,7 +25,7 @@ import type {
 } from '@/types';
 
 const MOBILE_BG_VISIBLE_FIELD_KEYS = new Set([
-  'category', 'make', 'model', 'modification', 'fuel', 'condition',
+  'category', 'body_type', 'make', 'model', 'modification', 'fuel', 'condition',
   'power', 'euro_standard', 'gearbox', 'displacement', 'price', 'currency',
   'vat_included', 'mileage', 'year', 'month', 'color', 'location', 'vin',
   'title', 'description', 'final_description',

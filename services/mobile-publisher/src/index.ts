@@ -30,7 +30,11 @@ const FIELD_SELECTORS: Record<string, string> = {
   condition: '[name="f25"]', power: '[name="f9"]', euro_standard: '[name="f29"]', gearbox: '[name="f10"]',
   displacement: '[name="f30"]', price: '[name="f12"]', currency: '[name="f13"]', vat_included: '[name="f31"]',
   mileage: '[name="f16"]', month: '[name="f14"]', year: '[name="f15"]',
-  color: '[name="f17"]', location: '[name="f18"]', country: '[name="f19"]', vin: '[name="f32"]',
+  color: '[name="f17"]',
+  // f11 is the body style and the publish form requires it. It is listed before
+  // the location on purpose: choosing it reloads the area and country lists.
+  body_type: '[name="f11"]',
+  location: '[name="f18"]', country: '[name="f19"]', vin: '[name="f32"]',
 };
 
 // Mobile.bg splits the origin in two: f18 is the market area and f19 is the
@@ -50,7 +54,7 @@ const COUNTRY_CANDIDATES: Array<[string, string[]]> = [
 // Everything else — colour, modification, extras, the Canada-only additions and
 // the VIN — stays optional and is reported without blocking.
 const STRICT_FIELDS = (process.env.MOBILE_BG_STRICT_FIELDS
-  || 'title,make,model,price,currency,condition,fuel,gearbox,year,mileage,location,country')
+  || 'title,make,model,body_type,price,currency,condition,fuel,gearbox,year,mileage,location,country')
   .split(',').map(key => key.trim()).filter(Boolean);
 const VALUE_ALIASES: Record<string, Record<string, string>> = {
   fuel: { Бензин: 'Бензинов', Дизел: 'Дизелов', Хибрид: 'Хибриден', 'Газ (LPG)': 'Газ' },
@@ -59,6 +63,33 @@ const VALUE_ALIASES: Record<string, Record<string, string>> = {
   month: Object.fromEntries(['Януари','Февруари','Март','Април','Май','Юни','Юли','Август','Септември','Октомври','Ноември','Декември'].map(v => [v, v.toLocaleLowerCase('bg')])),
   vat_included: { Да: 'Цената е с включено ДДС', Не: 'Цената е без ДДС', 'Цената е с включено ДДС': 'Цената е с включено ДДС', 'Цената е без ДДС': 'Цената е без ДДС', 'Частна продажба./Освободена от ДДС продажба': 'Частна продажба./Освободена от ДДС продажба' },
 };
+
+// f11 is Mobile.bg's «Категория» on the publish form and it is the body style,
+// not the ad section. The order matters: «minivan» must be tested before «van»,
+// because the shorter word is a substring of the longer one. The wording on the
+// right is what the live form offered.
+const BODY_TYPE_ALIASES: Array<[RegExp, string]> = [
+  [/minivan|multi.?purpose|mpv/i, 'Миниван'],
+  [/pick.?up|truck|пикап/i, 'Пикап'],
+  [/suv|crossover|sport.?utility|джип|джипове/i, 'Джип'],
+  [/convertible|cabrio|кабрио/i, 'Кабрио'],
+  [/hatch|хечбек|хеч/i, 'Хечбек'],
+  [/coupe|coupé|купе/i, 'Купе'],
+  [/wagon|estate|station|комби/i, 'Комби'],
+  [/sedan|saloon|седан/i, 'Седан'],
+  [/van|ван/i, 'Ван'],
+];
+
+// Returns Mobile.bg's own wording for a body style, or '' when the source did
+// not supply one. Empty is deliberate: the field is left to the broker rather
+// than guessed, because a wrong f11 quietly reshapes the listing.
+function resolveBodyType(value: string): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (BODY_TYPE_ALIASES.some(([, label]) => label.toLocaleLowerCase('bg') === raw.toLocaleLowerCase('bg'))) return raw;
+  const match = BODY_TYPE_ALIASES.find(([pattern]) => pattern.test(raw));
+  return match ? match[1] : '';
+}
 const EXTRA_ALIASES: Record<string, string> = {
   ABS: 'Антиблокираща система', ESP: 'Електронна програма за стабилизиране', ISOFIX: 'Система ISOFIX',
   'Автоматичен климатик': 'Климатроник', 'Подгряване на предни седалки': 'Подгряване на седалките',
@@ -322,12 +353,27 @@ async function populateStepOne(page: Page, fields: DraftField[], extras: DraftEx
     // country field of its own to carry it.
     if (key === 'location') {
       value = LOCATION_ALIASES[value] || value;
+    } else if (key === 'body_type') {
+      // f11 is the body style, not the ad section: «category» is the fixed
+      // value «Автомобили и джипове» and would never match an option here.
+      const raw = ['body_type', 'body', 'bodyType', 'body_style']
+        .map(candidate => values.get(candidate) || '')
+        .find(candidate => candidate) || '';
+      value = resolveBodyType(raw);
     } else if (key === 'country') {
       const joined = values.get('location') || '';
       const match = COUNTRY_CANDIDATES.find(([, names]) => names.some(name => joined.includes(name)));
       value = match ? match[0] : '';
     }
-    if (!value) continue;
+    if (!value) {
+      // A required field that the draft simply does not have is recorded here
+      // rather than skipped: otherwise a missing f11 left the form with no body
+      // style and the run still reported success. «country» is excluded because
+      // it is derived from the origin and is legitimately empty for a listing
+      // that does not come from an import source.
+      if (STRICT_FIELDS.includes(key) && key !== 'country') skipped.push({ key, value: '', reason: 'Няма стойност в черновата.' });
+      continue;
+    }
     value = VALUE_ALIASES[key]?.[value] || value;
     const control = page.locator(selector).first();
     if (!await control.count()) { skipped.push({ key, value, reason: 'Полето липсва в Mobile.bg.' }); continue; }
@@ -343,7 +389,9 @@ async function populateStepOne(page: Page, fields: DraftField[], extras: DraftEx
       skipped.push({ key, value, reason: 'Стойността не беше приета.' }); continue;
     }
     filled.push(key);
-    if (key === 'make' || key === 'location' || key === 'country') await page.waitForTimeout(500);
+    // Choosing any of these reloads a list further down the form: «Марка»
+    // reloads «Модел», and «Категория» (f11) and «Област» both reload «Държава».
+    if (key === 'make' || key === 'body_type' || key === 'location' || key === 'country') await page.waitForTimeout(500);
   }
   const derived = [
     values.get('drivetrain') === '4x4' ? '4x4' : '',

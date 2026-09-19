@@ -20,6 +20,12 @@ export interface MobileBgFieldDef {
 export const MOBILE_BG_FIELD_MAP: MobileBgFieldDef[] = [
   // === 1. Основни данни за автомобила ===
   { key: 'category', mobile_bg_label: 'Категория', our_db_key: 'category', field_type: 'select', required: true, source: 'catalog', agent_can_fill: true, needs_human_confirmation: false, section: 'basic', options: ['Автомобили и джипове'] },
+  // Mobile.bg labels two different things «Категория»: the ad section, which is
+  // fixed above, and the body style, which is the control f11 and has a list of
+  // its own. The body style is the one the publish form insists on, so it is
+  // tracked separately instead of overloading «category», whose only valid value
+  // is «Автомобили и джипове».
+  { key: 'body_type', mobile_bg_label: 'Категория (тип автомобил)', our_db_key: 'body_type', field_type: 'select', required: true, source: 'autotrader', agent_can_fill: true, needs_human_confirmation: true, section: 'basic', options: ['Джип','Пикап','Седан','Купе','Миниван','Хечбек','Кабрио','Комби','Ван'] },
   { key: 'make', mobile_bg_label: 'Марка', our_db_key: 'make', field_type: 'select', required: true, source: 'catalog', agent_can_fill: true, needs_human_confirmation: false, section: 'basic' },
   { key: 'model', mobile_bg_label: 'Модел', our_db_key: 'model', field_type: 'select', required: true, source: 'catalog', agent_can_fill: true, needs_human_confirmation: false, section: 'basic' },
   { key: 'modification', mobile_bg_label: 'Модификация', our_db_key: 'modification', field_type: 'text', required: false, source: 'agent', agent_can_fill: true, needs_human_confirmation: true, section: 'basic', placeholder: 'напр. 2.0 TDI 190hp Premium' },

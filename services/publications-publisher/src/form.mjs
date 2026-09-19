@@ -176,6 +176,30 @@ export async function inspectForm(session) {
 const CONTACT_PHONE = process.env.PUBLICATIONS_CONTACT_PHONE || '0887353653';
 const DEFAULT_DESCRIPTION = process.env.PUBLICATIONS_DESCRIPTION || '!!!реална крайна цена!!!';
 
+// f11 is Mobile.bg's «Категория» on the publish form and it is the body style,
+// not the ad section. The job payload is produced outside this repository, so
+// the value is resolved here as well instead of assuming a body_label was sent.
+// Order matters: «minivan» is tested before «van», whose key it contains.
+const BODY_TYPE_ALIASES = [
+  [/minivan|multi.?purpose|mpv/i, 'Миниван'],
+  [/pick.?up|truck|пикап/i, 'Пикап'],
+  [/suv|crossover|sport.?utility|джип|джипове/i, 'Джип'],
+  [/convertible|cabrio|кабрио/i, 'Кабрио'],
+  [/hatch|хечбек|хеч/i, 'Хечбек'],
+  [/coupe|coupé|купе/i, 'Купе'],
+  [/wagon|estate|station|комби/i, 'Комби'],
+  [/sedan|saloon|седан/i, 'Седан'],
+  [/van|ван/i, 'Ван'],
+];
+
+function resolveBodyType(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (BODY_TYPE_ALIASES.some(([, label]) => label.toLocaleLowerCase('bg') === raw.toLocaleLowerCase('bg'))) return raw;
+  const match = BODY_TYPE_ALIASES.find(([pattern]) => pattern.test(raw));
+  return match ? match[1] : '';
+}
+
 // Steps kept from the proven script: submit step one through actions=2 rather
 // than hunting for a «Продължи» control, confirm with the exact «Преглед на
 // обявата» text, then check the public page instead of trusting the form.
@@ -197,7 +221,9 @@ export async function publishOne(session, item) {
     const fields = [
       ['f8', item.fuel_label, 'select'], ['f25', 'Употребяван', 'select'], ['f9', item.power || '', 'input'],
       ['f12', item.price_eur, 'input'], ['f13', item.currency || 'EUR', 'select'], ['f10', item.gearbox_label, 'select'],
-      ['f11', item.body_label, 'select'], ['f31', 'Цената е с включено ДДС', 'select'], ['f16', item.mileage, 'input'],
+      // f11 must be set before f18: choosing it is what reloads the area list.
+      ['f11', resolveBodyType(item.body_label || item.body_type || item.body || item.bodyType), 'select'],
+      ['f31', 'Цената е с включено ДДС', 'select'], ['f16', item.mileage, 'input'],
       ['f14', item.month_label, 'select'], ['f15', item.year, 'select'], ['f17', item.color_label, 'select'],
       ['f18', 'Извън страната', 'select'],
     ];

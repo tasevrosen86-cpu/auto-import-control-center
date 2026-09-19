@@ -19,6 +19,7 @@ type IncomingField = {
 
 const fieldMeta: Record<string, { label: string; dbKey: string; fieldType: string }> = {
   category: { label: 'Категория', dbKey: 'category', fieldType: 'select' },
+  body_type: { label: 'Категория (тип автомобил)', dbKey: 'body_type', fieldType: 'select' },
   make: { label: 'Марка', dbKey: 'make', fieldType: 'select' },
   model: { label: 'Модел', dbKey: 'model', fieldType: 'select' },
   modification: { label: 'Модификация', dbKey: 'modification', fieldType: 'text' },
