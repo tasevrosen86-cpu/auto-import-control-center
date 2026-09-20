@@ -372,6 +372,90 @@ jobs:
           sudo systemctl disable --now aicc-publications.timer || true
           echo "Publications timer is installed but intentionally stopped until queue verification."
 
+          # Expose only the live browser view needed for a one-time manual
+          # Mobile.bg sign-in. VNC itself remains localhost-only. Nginx asks the
+          # signed Edge Function to validate a 15-minute, Admin-issued ticket
+          # before serving the VNC page or WebSocket.
+          sudo mkdir -p /etc/nginx/snippets
+          sudo tee /etc/nginx/snippets/aicc-publications-browser.conf >/dev/null <<'NGINX'
+          location = /publications-browser/vnc.html {
+            access_log off;
+            auth_request /_aicc_publications_browser_auth;
+            proxy_pass http://127.0.0.1:6080/vnc.html;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_buffering off;
+            add_header Cache-Control "no-store" always;
+          }
+          location = /publications-browser/websockify {
+            access_log off;
+            auth_request /_aicc_publications_browser_auth;
+            proxy_pass http://127.0.0.1:6080/websockify;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+            proxy_buffering off;
+          }
+          # noVNC's static JavaScript/CSS contains no session data. Keeping it
+          # public lets the protected vnc.html load relative assets normally.
+          location ^~ /publications-browser/ {
+            proxy_pass http://127.0.0.1:6080/;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+          }
+          location = /_aicc_publications_browser_auth {
+            internal;
+            proxy_pass_request_body off;
+            proxy_set_header Content-Length "";
+            proxy_set_header X-Original-URI $request_uri;
+            proxy_set_header X-Original-Method $request_method;
+            proxy_set_header apikey "sb_publishable_3szh1-AiAAUYDeVBwO7bJQ_gXhkBU0A";
+            proxy_ssl_server_name on;
+            proxy_pass https://cgftjqwebvddtsbcbeml.supabase.co/functions/v1/publication-browser-access/validate;
+          }
+          NGINX
+          AICC_SITE_CONF="$(sudo nginx -T 2>&1 | awk '/^# configuration file / {p=$4; sub(/:$/, "", p)} /server_name .*autoimportcontrolcenter\\.biz/ {print p; exit}')"
+          if [ -z "$AICC_SITE_CONF" ] || [ ! -f "$AICC_SITE_CONF" ]; then
+            echo "::error::Nginx virtual host for autoimportcontrolcenter.biz was not found."
+            exit 1
+          fi
+          sudo cp -p "$AICC_SITE_CONF" "$AICC_SITE_CONF.aicc-browser-backup"
+          sudo python3 - "$AICC_SITE_CONF" <<'PY'
+          import re, sys
+          path = sys.argv[1]
+          text = open(path, encoding='utf-8').read()
+          marker = 'include /etc/nginx/snippets/aicc-publications-browser.conf;'
+          if marker not in text:
+              selected = None
+              for match in re.finditer(r'\\bserver\\s*\\{', text):
+                  depth = 0
+                  end = None
+                  for index in range(match.end() - 1, len(text)):
+                      if text[index] == '{':
+                          depth += 1
+                      elif text[index] == '}':
+                          depth -= 1
+                          if depth == 0:
+                              end = index
+                              break
+                  if end is not None and re.search(r'server_name\\s+[^;]*autoimportcontrolcenter\\.biz', text[match.start():end], re.I):
+                      selected = end
+                      break
+              if selected is None:
+                  raise SystemExit('AICC server block was not found in ' + path)
+              text = text[:selected] + '\\n    ' + marker + '\\n' + text[selected:]
+              open(path, 'w', encoding='utf-8').write(text)
+          PY
+          if ! sudo nginx -t; then
+            sudo cp -p "$AICC_SITE_CONF.aicc-browser-backup" "$AICC_SITE_CONF"
+            sudo nginx -t
+            exit 1
+          fi
+          sudo rm -f "$AICC_SITE_CONF.aicc-browser-backup"
           sudo systemctl reload nginx
           REMOTE_SCRIPT
 
