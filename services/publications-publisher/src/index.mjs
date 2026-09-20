@@ -39,7 +39,7 @@ export async function browserTest(){
  const session=await openSession();
  try{await openForm(session);const login=await ensureLoggedIn(session);const form=await inspectForm(session);return {...form,login_state:login.state,transport:describeTransport(),live_url:session.liveUrl||null,verdict:login.state==='already_logged_in'&&form.form_found?'SUCCESS':'WAITING_SESSION'};}finally{await session.close();}
 }
-async function process(job){
+async function processJob(job){
  let item;try{item=await payload(job);}catch(error){return finish(job,'FAILED',{},String(error));}
  const check=preflight(item);if(!check.ok)return finish(job,'FAILED',{preflight:check},check.failures.map(x=>x.message).join(' '));
  if(process.env.PUBLICATIONS_REAL_PUBLISH_ENABLED!=='true')return finish(job,'WAITING_CONFIRMATION',{preflight:check,transport:describeTransport()},'Защитният превключвател за реално публикуване е изключен.');
@@ -54,6 +54,6 @@ async function process(job){
 export async function drain(){
  if(!process.env.SUPABASE_SERVICE_ROLE_KEY)throw new Error('Липсва SUPABASE_SERVICE_ROLE_KEY: publisher-ът няма право да чете собствената опашка.');
  const {data,error}=await db.rpc('claim_publication_publish_job',{worker_name:worker});if(error)throw error;
- const job=Array.isArray(data)?data[0]:data;if(!job)return {processed:0};await process(job);return {processed:1,job_id:job.id};
+ const job=Array.isArray(data)?data[0]:data;if(!job)return {processed:0};await processJob(job);return {processed:1,job_id:job.id};
 }
 if(process.argv[1]&&import.meta.url===('file://' + process.argv[1])){const command=process.argv[2]||'drain';(command==='browser-test'?browserTest():drain()).then(x=>console.log(JSON.stringify(x))).catch(e=>{console.error(e.message||e);process.exit(1)});}
