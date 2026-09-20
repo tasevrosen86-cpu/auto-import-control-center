@@ -465,11 +465,18 @@ translations in it are observed facts from the live form — that part is solid 
 while its control flow was written down after the fact and is a reconstruction.
 The script itself has never been run end to end.
 
-### What our publisher is missing from it
+### What our publisher was missing from it
 
 * `f11` — body type (`Джип`, `Пикап`, `Седан`, `Ван` …), which our
-  `FIELD_SELECTORS` omits entirely.
-* `f22` — the contact phone, hardcoded as `0887353653`.
+  `FIELD_SELECTORS` omitted entirely. Now filled.
+* `f22` — the contact phone, hardcoded as `0887353653`. This one was missing
+  from three places at once: `MOBILE_BG_SELECTORS` never held it (it sat unused
+  in `MOBILE_BG_TEXT_SELECTORS`), the WebView plan never pushed it, and
+  `FIELD_SELECTORS` in `mobile-publisher` did not name it either. So the field
+  arrived empty on step 2 and Mobile.bg rejected the step, while every report
+  said the fill succeeded. It is now a step in the plan, a strict field in both
+  publishers, and covered by a test scenario that fails if it goes missing
+  again.
 * Submitting step 1 programmatically with
   `Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(f.elements.actions, '2')`
   then `HTMLFormElement.prototype.submit.call(f)`, instead of hunting for a
@@ -539,3 +546,46 @@ paths as configuration (`BROWSER_CDP_PATH`, `BROWSER_UPLOAD_PATH`) instead of
 hardcoding a guess, and `send()` is the single place to change once the real
 relay is known. If the gateway does not relay arbitrary CDP methods, that one
 function is rewritten; `form.mjs` stays as it is.
+
+## AICC Mobile is a third, standalone path
+
+`Apk/` holds a real installable Android app. It exists because Mobile.bg
+cannot be reached from the build or CI environment at all: every request from
+here, and from a real browser, returns HTTP 403. The phone is a network that
+Mobile.bg does accept, so the app is the transport rather than another attempt
+at the same wall.
+
+Its JavaScript is not a second implementation. `Apk/tools/build_assets.mjs`
+bundles `src/lib/mobile_bg_options.ts` for the field mapping and copies
+`src/lib/mobile_bg_fill.js` verbatim for the fill routine. Change either source
+and the app changes with it; the fill file is not edited to add an export, the
+export line is appended by the build instead. Those two files stay in `src/lib/`
+on purpose: the web app uses them too (`Extension.tsx` and `extension_build.ts`),
+so moving them would fork the mapping the app exists to share.
+
+The app opens Mobile.bg's own publish form in a WebView and fills it while the
+operator watches. It does not defeat a bot check and does not run headless: the
+account stays a normal account, and pressing «ПРОДЪЛЖИ» is left to the operator
+because the listing carries their phone number.
+
+The mapping is `f5` make, `f6` model, `f8` fuel, `f9` power, `f10` gearbox,
+`f11` body, `f12` price, `f13` currency, `f14` month, `f15` year, `f16` mileage,
+`f17` colour, `f18` area, `f19` country, `f21` description, `f22` phone,
+`f25` condition, `f31` VAT. `f11` is the body style and is now mapped; it must
+be filled **before** `f18`/`f19`, because choosing it reloads the area and
+country lists and would otherwise clear them. Its value comes from the
+`body_type` draft field, never from `category`: «Категория» on the publish form
+means the body style, while the `category` field is the fixed ad section
+«Автомобили и джипове», and the two never match. The mapping lives in
+`resolveBodyType` (`mobile_bg_options.ts`, mirrored in `mobile-publisher` and
+`publications-publisher`, which are standalone and do not import from `src/`).
+
+Build it with `npm run apk:assets` then
+`cd Apk && ./gradlew :app:assembleRelease`, or run the `build-apk`
+workflow, which attaches the APK as an artifact so it can be installed from the
+phone without a cable. Assets and icons are generated, so they are gitignored.
+
+Locally the build needs JDK 21 and an Android SDK with `platforms;android-35`
+and `build-tools;35.0.0`; `Apk/local.properties` points Gradle at the SDK and is
+gitignored. The Gradle wrapper pins 8.10.2 and the Android Gradle Plugin 8.7.3,
+the same pair CI uses, so a local build and a CI build produce the same APK.

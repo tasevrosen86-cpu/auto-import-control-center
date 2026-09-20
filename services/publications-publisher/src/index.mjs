@@ -11,24 +11,37 @@
 import { createClient } from '@supabase/supabase-js';
 import { openSession, describeTransport } from './session.mjs';
 import { inspectForm, publishOne, openForm, ensureLoggedIn } from './form.mjs';
+import { preflight, isDuplicate } from './preflight.mjs';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
-if (!SUPABASE_URL || !SUPABASE_KEY) throw new Error('Липсват SUPABASE_URL и SUPABASE_ANON_KEY (или SUPABASE_SERVICE_ROLE_KEY).');
 
-const db = createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false } });
+// The browser gate must be runnable before the database is configured: it is the
+// step that decides whether the form is reachable at all, and needing Supabase
+// first would mean configuring a database to answer a question about a browser.
+// The worker and the CLI still write every result when the credentials are there.
+const db = SUPABASE_URL && SUPABASE_KEY
+  ? createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false } })
+  : null;
 const WORKER = process.env.PUBLICATIONS_WORKER_NAME || `publications-${process.pid}`;
 
+// The report requires progress after every significant step, and the
+// specification makes the event log append-only. A log write must never be the
+// reason a publish run fails, so a missing table is tolerated here.
 async function log(jobId, step, message, level = 'info') {
   console.log(`[${level}] ${step || '-'} ${message}`);
+  if (!db) return;
   await db.from('publication_logs').insert({ job_id: jobId, level, step, message }).then(() => undefined, () => undefined);
+  await db.from('publication_events').insert({ job_id: jobId, state: step || 'step', worker: WORKER, message }).then(() => undefined, () => undefined);
 }
 
 async function finish(job, status, details, error) {
+  if (!db) return;
   await db.from('publication_jobs').update({
     status,
     last_error: error || null,
     public_url: details.listing_url || null,
+    mobilebg_url: details.listing_url || null,
     finished_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   }).eq('id', job.id);
@@ -52,32 +65,64 @@ export async function browserTest() {
     await log(null, 'browser_test', `Транспорт: ${JSON.stringify(describeTransport())}`);
     if (session.liveUrl) await log(null, 'browser_test', `Наблюдение на сесията: ${session.liveUrl}`);
     await openForm(session);
-    // Sign in first: the publisher URL serves the public page to a signed-out
-    // browser, so the form only appears after this.
+    // The worker does not sign in — the profile carries the session. A password
+    // box means a person must establish it, so that is reported and not guessed.
     const login = await ensureLoggedIn(session);
-    await log(null, 'browser_test', `Вход: ${login.state}`, login.state === 'login_failed' || login.state === 'form_not_recognized' ? 'error' : 'info');
-    await openForm(session);
+    await log(null, 'browser_test', `Вход: ${login.state}`, login.state === 'session_required' ? 'error' : 'info');
+    if (login.reason) await log(null, 'browser_test', login.reason, 'error');
     const form = await inspectForm(session);
-    await log(null, 'browser_test', `Присъда: ${form.verdict}. ${form.reason}`, form.verdict === 'SUCCESS' ? 'info' : 'error');
-    return { ...form, login_state: login.state, live_url: session.liveUrl || null, browser_id: session.browserId || null };
+    // A signed-out profile is not a block and must not be reported as one. Every
+    // publish run opens with ensureLoggedIn's question, and the gate asks the
+    // same question, so the two agree on what a signed-out page looks like.
+    const verdict = login.state === 'session_required' || login.state === 'signed_in_without_form'
+      ? 'session_required'
+      : form.verdict;
+    const reason = verdict === 'session_required'
+      ? 'Публикуването изисква влязла сесия, а профилът е излязъл. Това не е блокада и не е проблем с полетата.'
+      : form.reason;
+    await log(null, 'browser_test', `Присъда: ${verdict}. ${reason}`, verdict === 'SUCCESS' ? 'info' : 'error');
+    return {
+      ...form, verdict, reason,
+      login_state: login.state, login_reason: login.reason || null,
+      live_url: session.liveUrl || null, browser_id: session.browserId || null,
+    };
   } finally {
     await session.close();
   }
 }
 
 async function prepare(job) {
+  const payload = job.payload || {};
+  // The specification re-checks the draft in the backend rather than trusting
+  // the frontend, and a job that fails here never reaches a browser.
+  const check = preflight(payload);
+  if (!check.ok) {
+    await log(job.id, 'blocked', `Preflight: ${check.failures.map((f) => f.code).join(', ')}`, 'error');
+    await finish(job, 'BLOCKED', { state: check.failures[0].code, message: check.failures.map((f) => f.message).join(' ') },
+      check.failures.map((f) => f.message).join(' '));
+    return;
+  }
+  for (const note of check.notes) await log(job.id, 'preflight', note);
+
+  const { data: existing } = await db.from('publication_jobs').select('payload,public_url,status').limit(200);
+  if (isDuplicate(payload, existing || [])) {
+    await log(job.id, 'duplicate_skipped', `Ред ${payload.master_row} вече има активна обява.`, 'error');
+    await finish(job, 'BLOCKED', { state: 'duplicate_skipped', message: 'Редът вече е публикуван.' }, 'Редът вече има активна обява в Mobile.bg.');
+    return;
+  }
+
   const session = await openSession();
   try {
     await log(job.id, 'prepare', 'Отварям формата, за да видя дали е достъпен.');
     await openForm(session);
     const form = await inspectForm(session);
-    await log(job.id, 'prepare', `Форма: ${JSON.stringify(form)}`, form.form_found ? 'info' : 'error');
+    await log(job.id, 'source_validated', `Форма: ${JSON.stringify(form)}`, form.form_found ? 'info' : 'error');
     if (!form.form_found) {
-      await finish(job, 'BLOCKED', { state: 'blocked', message: form.body_text },
+      await finish(job, 'BLOCKED', { state: 'blocked_source', message: form.body_text },
         `Формата на Mobile.bg не се зареди (${form.control_count} полета). Страницата върна: ${form.body_text || 'нищо'}`);
       return;
     }
-    await finish(job, 'COMPLETED', { state: 'prepared', message: 'Формата е достъпна и полетата са налични.' });
+    await finish(job, 'COMPLETED', { state: 'ready', message: 'Формата е достъпна и полетата са налични.' });
   } finally {
     await session.close();
   }
@@ -85,20 +130,33 @@ async function prepare(job) {
 
 async function publish(job) {
   const payload = job.payload || {};
+  const check = preflight(payload);
+  if (!check.ok) {
+    await log(job.id, 'blocked', `Preflight: ${check.failures.map((f) => f.code).join(', ')}`, 'error');
+    await finish(job, 'BLOCKED', { state: check.failures[0].code }, check.failures.map((f) => f.message).join(' '));
+    return;
+  }
+
   const session = await openSession();
   try {
     await log(job.id, 'publish', `Публикувам ${payload.make || ''} ${payload.model || ''} (${payload.year || ''}).`);
+    if (session.liveUrl) await log(job.id, 'publish', `Наблюдение на сесията: ${session.liveUrl}`);
     const result = await publishOne(session, {
       ...payload,
-      stageImages: () => session.stageImages(payload.source_images || []),
+      // Photos are fetched here and handed to the file input as local files;
+      // the source URL is never sent to Mobile.bg directly.
+      stageImages: (urls) => session.stageImages(urls || payload.source_images || []),
     });
-    const status = result.state === 'published' ? 'COMPLETED' : result.state === 'published_no_photos' ? 'COMPLETED' : 'FAILED';
-    await finish(job, status, result, result.state === 'failed' ? result.message : (result.state === 'published_no_photos' ? 'Обявата излезе, но проверката не намери снимките.' : null));
-    await log(job.id, 'publish', `Резултат: ${result.state}.`, status === 'COMPLETED' ? 'info' : 'error');
+    const published = result.state === 'published' || result.state === 'published_no_photos';
+    await finish(job, published ? 'COMPLETED' : 'FAILED', result,
+      result.state === 'failed'
+        ? result.message
+        : (result.state === 'published_no_photos' ? 'Обявата излезе, но проверката не намери снимките.' : null));
+    await log(job.id, 'publish', `Резултат: ${result.state}.`, published ? 'info' : 'error');
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Непозната грешка.';
     await finish(job, 'FAILED', { state: 'failed' }, message);
-    await log(job.id, 'publish', message, 'error');
+    await log(job.id, 'failed', message, 'error');
   } finally {
     await session.close();
   }
@@ -134,6 +192,10 @@ if (isMain) {
       console.log(`  Адрес: ${result.url}`);
       console.log(`  ${result.reason}`);
       console.log(`  Транспорт: ${JSON.stringify(describeTransport())}`);
+      if (result.verdict === 'session_required') {
+        console.log(`  ${result.login_reason || 'Профилът е излязъл от Mobile.bg.'}`);
+        console.log('  Пусни: node src/onboard.mjs — влиза се веднъж, ръчно, през живия изглед.');
+      }
       console.log('=========================================');
       process.exit(result.verdict === 'SUCCESS' ? 0 : 1);
     }

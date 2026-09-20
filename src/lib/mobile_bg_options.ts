@@ -1,4 +1,8 @@
 import type { MobileBgDraftField, MobileBgDraftExtra } from '@/types';
+// Relative, not '@/lib/...': this module is also bundled by the Android asset
+// build, which runs esbuild directly and has no alias configuration. A '@/'
+// path would resolve in Vite and fail on the phone's build.
+import { ROYAL_CARS_PUBLISH_DEFAULTS, composeRoyalCarsDescription } from './company_profile';
 
 export const MONTHS_BG = ['Януари', 'Февруари', 'Март', 'Април', 'Май', 'Юни', 'Юли', 'Август', 'Септември', 'Октомври', 'Ноември', 'Декември'];
 
@@ -9,7 +13,13 @@ export const MOBILE_BG_SELECTORS: Record<string, string> = {
   make: 'f5', model: 'f6', modification: 'f7', fuel: 'f8', condition: 'f25',
   power: 'f9', euro_standard: 'f29', gearbox: 'f10', displacement: 'f30',
   price: 'f12', currency: 'f13', vat_included: 'f31', mileage: 'f16',
-  month: 'f14', year: 'f15', color: 'f17', location: 'f18', country: 'f19', vin: 'f32',
+  month: 'f14', year: 'f15', color: 'f17',
+  // f11 is Mobile.bg's «Категория» on the publish form, and it is the body
+  // style, not the ad section. It has to be set before the area and the
+  // country: choosing it is what reloads their option lists, so filling it
+  // afterwards would leave both of them wiped.
+  body_type: 'f11',
+  location: 'f18', country: 'f19', vin: 'f32',
 };
 
 export const MOBILE_BG_TEXT_SELECTORS: Record<string, string> = {
@@ -68,6 +78,37 @@ export const EXTRA_ALIASES: Record<string, string> = {
 // Some brands are stored under a name Mobile.bg does not list.
 const MAKE_ALIASES: Record<string, string> = { RAM: 'Dodge', Volkswagen: 'VW' };
 
+// Mobile.bg's «Категория» control (f11) is the body style, and it only accepts
+// its own wording. The values below are the ones the live form offered; on the
+// left are the shapes they arrive in, from AutoTrader's bodyType, from Encar
+// and from the catalog. The user supplied this mapping directly.
+//
+// Order matters: «minivan» has to be tested before «van», because the shorter
+// key is a substring of the longer one and would otherwise win.
+const BODY_TYPE_ALIASES: Array<[RegExp, string]> = [
+  [/minivan|multi.?purpose|mpv/i, 'Миниван'],
+  [/pick.?up|truck|пикап/i, 'Пикап'],
+  [/suv|crossover|sport.?utility|джип|джипове/i, 'Джип'],
+  [/convertible|cabrio|кабрио/i, 'Кабрио'],
+  [/hatch|хечбек|хеч/i, 'Хечбек'],
+  [/coupe|coupé|купе/i, 'Купе'],
+  [/wagon|estate|station|комби/i, 'Комби'],
+  [/sedan|saloon|седан/i, 'Седан'],
+  [/van|ван/i, 'Ван'],
+];
+
+// Returns Mobile.bg's own wording for a body style, or '' when the source did
+// not supply one. An empty result is deliberate: the field is left for the
+// broker rather than guessed, since a wrong f11 silently reshapes the listing.
+export function resolveBodyType(value: string): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  // Already one of Mobile.bg's own labels.
+  if (BODY_TYPE_ALIASES.some(([, label]) => label.toLocaleLowerCase('bg') === raw.toLocaleLowerCase('bg'))) return raw;
+  const match = BODY_TYPE_ALIASES.find(([pattern]) => pattern.test(raw));
+  return match ? match[1] : '';
+}
+
 export type PlanStep = {
   selector: string;
   value: string;
@@ -110,13 +151,27 @@ export function buildMobileBgPlan(fields: MobileBgDraftField[], extras: MobileBg
       value = COUNTRY_CANDIDATES.find(([, names]) => names.some(name => joined.includes(name)))?.[0] || '';
     } else if (key === 'make') {
       value = MAKE_ALIASES[value] || value;
+    } else if (key === 'body_type') {
+      // f11 is the body style, not the ad section, so it must not read the
+      // «category» draft field: that one is the fixed value «Автомобили и
+      // джипове» and would never match an option. The body style arrives under
+      // any of the names below depending on the source, so the first one that
+      // carries a value is used.
+      const raw = ['body_type', 'body', 'bodyType', 'body_style']
+        .map(candidate => values.get(candidate) || '')
+        .find(candidate => candidate) || '';
+      value = resolveBodyType(raw);
     }
     if (!value) continue;
     const raw = values.get(key) || '';
     steps.push({
       selector,
       value,
-      kind: ['price', 'power', 'displacement', 'mileage', 'vin'].includes(key) ? 'input' : 'select',
+      // «Модификация» (f7) is a free-text input on the live form, not a list,
+      // even though it sits among the selects. Treating it as one made the fill
+      // read the options of a text box, find none and report the field as
+      // unfillable.
+      kind: ['price', 'power', 'displacement', 'mileage', 'vin', 'modification'].includes(key) ? 'input' : 'select',
       label: key,
       // «country» is derived rather than translated, and every alias is a real
       // change of wording, so this is what the operator needs to see.
@@ -126,8 +181,21 @@ export function buildMobileBgPlan(fields: MobileBgDraftField[], extras: MobileBg
 
   const title = values.get('title') || '';
   if (title) steps.push({ selector: 'title', value: title, kind: 'input', label: 'title', translated: false });
-  const description = values.get('final_description') || values.get('description') || '';
-  if (description) steps.push({ selector: MOBILE_BG_TEXT_SELECTORS.description, value: description, kind: 'textarea', label: 'description', translated: false });
+  // «Допълнителна информация» (f21) and «Мобилен телефон» (f22) are both blue —
+  // Mobile.bg will not advance to step 2 without them. Neither is guaranteed to
+  // be present in the draft: a draft created from the catalogue carries the
+  // company description, but one whose description was cleared, or that was
+  // never seeded with the company phone, arrives empty. They fell through the
+  // whole plan in that case, which is why the form kept insisting the blue
+  // fields were required even though the fill reported success. Both now fall
+  // back to the same company profile the «Обяви» flow publishes with, so f21 and
+  // f22 are always in the plan.
+  const description = values.get('final_description') || values.get('description')
+    || composeRoyalCarsDescription();
+  steps.push({ selector: MOBILE_BG_TEXT_SELECTORS.description, value: description, kind: 'textarea', label: 'description', translated: false });
+
+  const phone = values.get('phone') || ROYAL_CARS_PUBLISH_DEFAULTS.phone;
+  steps.push({ selector: MOBILE_BG_TEXT_SELECTORS.phone, value: phone, kind: 'input', label: 'phone', translated: false });
 
   const derived: string[] = [
     values.get('drivetrain') === '4x4' ? '4x4' : '',
@@ -142,7 +210,10 @@ export function buildMobileBgPlan(fields: MobileBgDraftField[], extras: MobileBg
     ...derived,
   ])];
 
-  for (const key of ['make', 'model', 'price', 'currency', 'condition', 'fuel', 'gearbox', 'year', 'mileage']) {
+  // «phone» is checked here because Mobile.bg rejects step 1 without it, and it
+  // was previously absent from the plan entirely: a draft missing it looked
+  // complete right up to the validation error on the second step.
+  for (const key of ['make', 'model', 'price', 'currency', 'condition', 'fuel', 'gearbox', 'year', 'mileage', 'phone']) {
     if (!steps.some(step => step.label === key)) missing.push(key);
   }
 

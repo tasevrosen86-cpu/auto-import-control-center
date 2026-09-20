@@ -46,8 +46,10 @@ const readForm = () => page.evaluate(() => {
   };
   return {
     make: value('f5'), model: value('f6'), fuel: value('f8'), condition: value('f25'),
+    body_type: value('f11'),
     month: value('f14'), year: value('f15'), location: value('f18'), country: value('f19'),
     color: value('f17'), title: value('title'), description: value('f21'), vin: value('f32'),
+    phone: value('f22'),
   };
 });
 
@@ -70,6 +72,7 @@ const canadaFields = [
   { field_key: 'title', value: 'Dodge RAM 1500 2023' },
   { field_key: 'make', value: 'Dodge' },
   { field_key: 'model', value: 'RAM 1500' },
+  { field_key: 'body_type', value: 'Truck' },
   { field_key: 'fuel', value: 'Дизел' },
   { field_key: 'condition', value: 'Използван' },
   { field_key: 'price', value: '42000' },
@@ -81,23 +84,51 @@ const canadaFields = [
   { field_key: 'year', value: '2023' },
   { field_key: 'location', value: 'Извън страната → Канада' },
   { field_key: 'description', value: 'Тестово описание' },
+  { field_key: 'phone', value: '0887353653' },
 ];
 const withKorea = canadaFields.map((field) => {
   if (field.field_key === 'location') return { field_key: 'location', value: 'Извън страната → Южна Корея' };
   if (field.field_key === 'make') return { field_key: 'make', value: 'Kia' };
   if (field.field_key === 'model') return { field_key: 'model', value: 'Sorento' };
+  if (field.field_key === 'body_type') return { field_key: 'body_type', value: 'SUV' };
   return field;
 });
 
 // The dependent lists must be waited for, and the joined origin must be split.
+// f11 must also land: it is required by the form, and it must be filled before
+// the origin or choosing it would wipe the country again.
 await scenario('пълна канадска чернова', canadaFields, {
   title: 'Dodge RAM 1500 2023',
   make: 'Dodge', model: 'RAM 1500', month: 'април',
+  body_type: 'Пикап',
   condition: 'Употребяван', fuel: 'Дизелов',
   location: 'Извън страната', country: 'Канада', description: 'Тестово описание',
+    phone: '0887353653',
 });
 
-await scenario('пълна корейска чернова', withKorea, { country: 'Южна Корея', model: 'Sorento' });
+await scenario('пълна корейска чернова', withKorea, { country: 'Южна Корея', model: 'Sorento', body_type: 'Джип' });
+
+// The «Категория» draft field is the ad section and must never be sent to f11:
+// it would not match any option and the body style would be left unset.
+const categoryNotBody = await scenario('category не се праща към f11', [
+  ...canadaFields.map((field) => (field.field_key === 'body_type' ? { field_key: 'body_type', value: '' } : field)),
+  { field_key: 'category', value: 'Автомобили и джипове' },
+], { body_type: '-' });
+if (categoryNotBody.blockedBy?.includes('body_type')) console.log('OK  липсващият тип автомобил спира обявата');
+else failures.push('липсващ задължителен тип автомобил не спря обявата');
+
+// The phone is required by Mobile.bg and used to be absent from the plan and
+// from FIELD_SELECTORS entirely, so every run reached step 2 with the field
+// empty and still reported success. A draft without it must stop the run.
+const noPhone = await scenario('задължителен телефон без стойност', [
+  ...canadaFields.filter((field) => field.field_key !== 'phone'),
+], { phone: '' });
+if (!noPhone.blockedBy?.includes('phone')) failures.push('липсващият телефон не спря обявата');
+
+// Minivan contains «van», so a wrong resolution order would send «Ван».
+await scenario('миниван не се превръща във ван', [
+  ...canadaFields.map((field) => (field.field_key === 'body_type' ? { field_key: 'body_type', value: 'Minivan' } : field)),
+], { body_type: 'Миниван' });
 
 // An optional value that does not exist must be reported, not fatal: colour and
 // VIN, the Canada-only extras and the modification stay free for the broker.

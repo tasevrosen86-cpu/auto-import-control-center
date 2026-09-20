@@ -118,6 +118,10 @@ export function createDraftSeed(vehicle: Vehicle, marketplaces: VehicleMarketpla
     displacement: firstRaw(raw, ['displacement_cc', 'displacement', 'engineDisplacement', 'engineSize']) || detail.displacement,
     euro_standard: normaliseEuro(firstRaw(raw, ['euro_standard', 'euroStandard', 'emissionClass', 'emissions', 'euro']) || detail.euro),
     color: firstRaw(raw, ['color', 'vehicleColor', 'exteriorColor', 'bodyColor', 'colour']) || detail.color,
+    // f11 on Mobile.bg is the body style. The catalog JSON does not carry one,
+    // so this stays empty there and the broker picks it; when a source listing
+    // did supply it, it arrives already normalised by the intake worker.
+    body_type: firstRaw(raw, ['body_type', 'bodyType', 'body_style', 'bodyStyle', 'vehicleConfiguration']) || asText(raw.body),
     condition: 'Използван',
     drivetrain: asText(raw.drivetrain),
     vin: asText(source?.vin ?? raw.vin),

@@ -148,8 +148,10 @@ function fillMobileBgForm(steps, extras) {
               report.skipped.push([step.label, 'Няма опция „' + step.value + '“']);
             } else {
               report.filled.push(step.label);
-              // The dependent lists reload after these three.
-              if (step.label === 'make' || step.label === 'location' || step.label === 'country') {
+              // Choosing any of these reloads a list further down the form:
+              // «Марка» reloads «Модел», «Категория» (f11) and «Област» both
+              // reload «Държава».
+              if (step.label === 'make' || step.label === 'body_type' || step.label === 'location' || step.label === 'country') {
                 await sleep(600);
               }
             }

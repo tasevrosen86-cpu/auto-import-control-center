@@ -329,6 +329,28 @@ function imagesFrom(root: unknown): JsonRecord[] {
     display_order: index + 1,
   }));
 }
+// Mobile.bg's f11 is the body style, and it only accepts its own wording. The
+// body style reaches us as AutoTrader's bodyType, as an Encar field, or not at
+// all, so it is normalised here rather than at publish time: that way the value
+// the broker reviews in the draft is the value the form will receive.
+function normalizeBodyType(value: string | null): string | null {
+  if (!value) return null;
+  const source = value.toLowerCase();
+  // «minivan» is tested before «van»: the shorter word is a substring of the
+  // longer one and would otherwise claim it.
+  if (source.includes('minivan') || source.includes('multi purpose') || source.includes('mpv')) return 'Миниван';
+  if (source.includes('pickup') || source.includes('pick-up') || source.includes('pick up') || source.includes('truck')) return 'Пикап';
+  if (source.includes('suv') || source.includes('crossover') || source.includes('sport utility')) return 'Джип';
+  if (source.includes('convertible') || source.includes('cabrio')) return 'Кабрио';
+  if (source.includes('hatch')) return 'Хечбек';
+  if (source.includes('coupe') || source.includes('coupé')) return 'Купе';
+  if (source.includes('wagon') || source.includes('estate') || source.includes('station')) return 'Комби';
+  if (source.includes('sedan') || source.includes('saloon')) return 'Седан';
+  if (source.includes('van')) return 'Ван';
+  // Already one of Mobile.bg's own labels, or a wording we do not recognise:
+  // kept as-is so it can be seen and corrected rather than silently dropped.
+  return value;
+}
 function normalizeDrivetrain(value: string | null): string | null {
   if (!value) return null;
   const source = value.toLowerCase();
@@ -372,6 +394,7 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string,
   const currency = nested(vehicle, 'offers', ['priceCurrency']) || firstValue(vehicle, ['priceCurrency', 'currency']);
   const euroStandard = normalizeEuro(detail.euro || firstValue(vehicle, ['euroStandard', 'euro_standard', 'emissionClass', 'emissions', 'euro']));
   const color = normalizeColor(detail.color || firstValue(vehicle, ['color', 'vehicleColor', 'exteriorColor', 'bodyColor', 'colour']));
+  const bodyType = normalizeBodyType(firstValue(vehicle, ['bodyType', 'body_type', 'vehicleConfiguration', 'bodyStyle', 'body_style']) || scalar(autoDetail.bodyType));
   const description = companyDescription;
   const fields: Array<{ key: string; value: string; source: string; proof: string }> = [];
   const push = (key: string, value: string | null) => { if (value) fields.push({ key, value, source, proof: job.source_url }); };
@@ -392,6 +415,7 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string,
   push('displacement', displacement);
   push('euro_standard', euroStandard);
   push('color', color);
+  push('body_type', bodyType);
   push('doors', firstValue(vehicle, ['numberOfDoors', 'doors']));
   push('seats', firstValue(vehicle, ['seatingCapacity', 'seats']));
   push('vin', firstValue(vehicle, ['vehicleIdentificationNumber', 'vin']));

@@ -1,13 +1,38 @@
-// The Mobile.bg form steps, taken from the proven mobilebg-direct-publisher.
+// The Mobile.bg form steps, taken from the proven direct publisher
+// (run-mobilebg-direct-v19-batch.mjs) as described in the technical report.
 //
 // Everything here talks to a `session` object rather than to Playwright or to
 // the browser gateway directly. Both of those expose the same Chrome DevTools
 // protocol — Playwright through context.newCDPSession(page) — so the step logic
 // below is identical for either transport. That is the whole point: we keep the
 // steps that already published real listings and change only how they are carried.
+//
+// The report is explicit about how a field is found: the named form and
+// form.elements[name], never CSS classes, XPath, placeholder or label text.
+// Selectors are not invented here; when the DOM drifts the run stops instead.
 
-export const FORM_URL = 'https://www.mobile.bg/pcgi/mobile.cgi?pubtype=1&act=6&subact=4&actions=1';
+import {
+  makeLabel, modelLabel, bodyLabel, fuelLabel, transmissionLabel, colorLabel,
+} from './mappings.mjs';
+
+// The live form URL. It is overridable so the step logic can be exercised
+// against the existing stub form without ever pointing a test at Mobile.bg.
+export const FORM_URL = process.env.PUBLICATIONS_FORM_URL || 'https://www.mobile.bg/pcgi/mobile.cgi?pubtype=1&act=6&subact=4&actions=1';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// The proven script hardcoded «януари». The report records that as the
+// historical value and keeps the current publishing rule as a separate
+// decision, so the default stays the proven one and a job may override it.
+const MONTHS_BY_NUMBER = ['януари', 'февруари', 'март', 'април', 'май', 'юни', 'юли', 'август', 'септември', 'октомври', 'ноември', 'декември'];
+const DEFAULT_MONTH = 'януари';
+
+function resolveMonth(item) {
+  if (item.month_label) return item.month_label;
+  const asNumber = Number(item.month);
+  if (Number.isInteger(asNumber) && asNumber >= 1 && asNumber <= 12) return MONTHS_BY_NUMBER[asNumber - 1];
+  if (typeof item.month === 'string' && item.month.trim()) return item.month.trim().toLocaleLowerCase('bg');
+  return DEFAULT_MONTH;
+}
 
 async function evaluate(session, expression) {
   const result = await session.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
@@ -17,6 +42,8 @@ async function evaluate(session, expression) {
   return result.result?.value;
 }
 
+// Native prototype setter plus input/change, exactly as the proven script did.
+// Playwright's select_option was not used and is not used here.
 async function setValue(session, name, value, kind = 'input') {
   const proto = kind === 'select' ? 'HTMLSelectElement' : kind === 'textarea' ? 'HTMLTextAreaElement' : 'HTMLInputElement';
   return evaluate(session, `(() => {
@@ -29,8 +56,10 @@ async function setValue(session, name, value, kind = 'input') {
   })()`);
 }
 
-// Returns the options the page really offered when nothing matches, so a failed
-// run explains itself instead of leaving a bare "option_missing".
+// Matches on the visible option text, case-insensitively, and returns the
+// option value only internally. The options the page really offered come back
+// when nothing matches, so a failed run explains itself instead of leaving a
+// bare "option_missing".
 async function selectText(session, name, text) {
   return evaluate(session, `(() => {
     const e = document.forms.namedItem("pub")?.elements[${JSON.stringify(name)}]
@@ -44,8 +73,9 @@ async function selectText(session, name, text) {
   })()`);
 }
 
-// Waits for a dependent option list instead of sleeping a fixed time: the model
-// list follows the make and the country list follows the location.
+// Waits for a dependent option list instead of sleeping a fixed length: the
+// model list follows the make and the country list follows the location.
+// 40 × 250 ms is the proven bound.
 async function waitForOptions(session, name, minimum = 2, attempts = 40) {
   for (let i = 0; i < attempts; i += 1) {
     const count = Number(await evaluate(session, `document.forms.namedItem("pub")?.elements[${JSON.stringify(name)}]?.options?.length || 0`));
@@ -58,87 +88,47 @@ async function waitForOptions(session, name, minimum = 2, attempts = 40) {
 export async function openForm(session) {
   await session.send('Page.navigate', { url: FORM_URL });
   await sleep(7000);
-  // The wizard lives inside frames on this site, so give them time to settle
-  // before deciding the page is not the form.
-  await waitForFormInAnyFrame(session, 20);
   await sleep(500);
 }
 
-// The form is not always in the top document: mobile.bg serves its publisher
-// inside frames, so a lookup limited to the main frame reports "no form" on a
-// page that is actually showing the form. This walks every frame.
-async function waitForFormInAnyFrame(session, attempts) {
-  if (!session.page) return false;
-  for (let i = 0; i < attempts; i += 1) {
-    for (const frame of session.page.frames()) {
-      try {
-        if (await frame.evaluate(() => Boolean(document.forms.namedItem('pub')))) return true;
-      } catch { /* a frame can be detached mid-walk */ }
-    }
-    await sleep(500);
-  }
-  return false;
-}
-
-// The proven script was handed an already-signed-in session, so it never had to
-// log in. A freshly created remote browser is signed out, and the publisher URL
-// then serves the public page: "Вход | Нова Регистрация". Without this step the
-// form is never reachable, however well the transport works.
+// The proven flow was handed an already-signed-in session, so it contained no
+// login automation at all — no username, no password, no OTP. The specification
+// forbids adding one, because the credential would then reach the worker and the
+// job payload. A signed-out profile is therefore reported and left for a person.
 //
-// The selectors are the ones the old flow already used. Credentials come from
-// the environment and are never logged.
+// Measured on the live page: a signed-out browser gets no form at all and no
+// password box either — it gets the public page whose text begins
+// «Вход | Нова Регистрация». Detecting this by the password box alone, as the
+// first version did, reported `already_logged_in` on a page that was plainly
+// signed out, which is why the gate misread a session problem as a form problem.
 export async function ensureLoggedIn(session) {
   if (!session.page) return { state: 'unknown' };
   const page = session.page;
-  const passwordBoxes = await page.locator('input[type="password"]').count().catch(() => 0);
-  if (passwordBoxes === 0) return { state: 'already_logged_in' };
 
-  const username = process.env.MOBILE_BG_USERNAME;
-  const password = process.env.MOBILE_BG_PASSWORD;
-  if (!username || !password) return { state: 'credentials_missing' };
+  const state = await page.evaluate(() => {
+    const text = (document.body?.innerText || '');
+    const form = document.forms.namedItem('pub');
+    return {
+      hasForm: Boolean(form) && [...form.elements].some((e) => e.name === 'f5'),
+      asksToSignIn: /Вход\s*\|\s*Нова Регистрация/.test(text),
+      hasMyAds: /Моите обяви/.test(text),
+      passwordBoxes: document.querySelectorAll('input[type="password"]').length,
+    };
+  }).catch(() => null);
+  if (!state) return { state: 'unknown' };
 
-  const user = page.locator(process.env.MOBILE_BG_LOGIN_USERNAME_SELECTOR || 'input[name="username"], input[name="email"], input[type="email"], input[type="text"]').first();
-  const pass = page.locator(process.env.MOBILE_BG_LOGIN_PASSWORD_SELECTOR || 'input[type="password"]').first();
-  const submit = page.locator(process.env.MOBILE_BG_LOGIN_SUBMIT_SELECTOR || 'button[type="submit"], input[type="submit"]').first();
-  if (!await user.count().catch(() => 0) || !await pass.count().catch(() => 0) || !await submit.count().catch(() => 0)) {
-    return { state: 'form_not_recognized' };
+  // The form itself is the proof of a usable session.
+  if (state.hasForm) return { state: 'already_logged_in' };
+  if (state.asksToSignIn || !state.hasMyAds) {
+    return {
+      state: 'session_required',
+      reason: 'Страницата иска вход. Сесията в профила е изтекла или липсва — влез ръчно през живия изглед.',
+    };
   }
-  await user.fill(username);
-  await pass.fill(password);
-  await submit.click();
-  await page.waitForLoadState('domcontentloaded').catch(() => undefined);
-  await sleep(2000);
-  // A missing password box only means signed in once we are off the login page.
-  const stillAsked = await page.locator('input[type="password"]').count().catch(() => 0);
-  return { state: stillAsked === 0 ? 'logged_in' : 'login_failed' };
+  return { state: 'signed_in_without_form', password_boxes: state.passwordBoxes };
 }
 
 export async function inspectForm(session) {
-  // Frames first: the form is inside one, and reading only the top document is
-  // what made a real Mobile.bg page look like a block page.
-  if (session.page) {
-    for (const frame of session.page.frames()) {
-      try {
-        const inFrame = await frame.evaluate(`(() => {
-          const form = document.forms.namedItem("pub")
-          if (!form) return null
-          const names = [...form.elements].map((e) => e.name).filter(Boolean)
-          return { url: location.href, title: document.title, form_found: true, frame: true, control_count: names.length, controls: names.slice(0, 40), has_make: names.includes("f5"), has_file_input: document.querySelectorAll('input[type="file"]').length > 0 }
-        })()`);
-        if (inFrame?.form_found) {
-          const verdict = inFrame.control_count > 0 && inFrame.has_make ? 'SUCCESS' : 'browser_blocked';
-          return {
-            ...inFrame,
-            verdict,
-            reason: verdict === 'SUCCESS'
-              ? 'Формата на Mobile.bg е реална: document.forms.namedItem("pub") съществува с полетата си, във фрейм.'
-              : `Формата е намерена, но с ${inFrame.control_count} полета${inFrame.has_make ? '' : ' и без марката'}.`,
-          };
-        }
-      } catch { /* a frame can be detached mid-walk */ }
-    }
-  }
-
   const seen = await evaluate(session, `(() => {
     const form = document.forms.namedItem("pub")
     const names = form ? [...form.elements].map((e) => e.name).filter(Boolean) : []
@@ -174,31 +164,37 @@ export async function inspectForm(session) {
 // Phone and description are required by Mobile.bg but are constant for us, so
 // they are configuration rather than draft data.
 const CONTACT_PHONE = process.env.PUBLICATIONS_CONTACT_PHONE || '0887353653';
+// The proven publisher left the description empty or fell back to this text; no
+// company template is recorded anywhere, so the fallback is kept, not invented.
 const DEFAULT_DESCRIPTION = process.env.PUBLICATIONS_DESCRIPTION || '!!!реална крайна цена!!!';
 
 // Steps kept from the proven script: submit step one through actions=2 rather
 // than hunting for a «Продължи» control, confirm with the exact «Преглед на
 // обявата» text, then check the public page instead of trusting the form.
 export async function publishOne(session, item) {
-  const result = { make: item.make, model: item.model, year: item.year, price_eur: item.price_eur };
+  const result = { row: item.row, make: item.make, model: item.model, year: item.year, price_eur: item.price_eur };
   try {
-    const makeText = { RAM: 'Dodge', Volkswagen: 'VW' }[item.make] || item.make;
-    const modelText = item.model;
-    // Sign in before the form: a fresh remote browser is signed out.
-    await openForm(session);
-    const login = await ensureLoggedIn(session);
-    if (login.state === 'credentials_missing') throw new Error('login_credentials_missing');
-    if (login.state === 'form_not_recognized' || login.state === 'login_failed') throw new Error(`login_failed:${login.state}`);
+    // The input contract carries internal values, so the translations happen
+    // here, from the tables lifted out of the proven script.
+    const makeText = makeLabel(item.make);
+    const modelText = modelLabel(item.make, item.model);
+    const gearboxText = item.gearbox_label || transmissionLabel(item.transmission);
+    const fuelText = item.fuel_label || fuelLabel(item.fuel);
+    const colourText = item.color_label || colorLabel(item.color);
+    const bodyText = item.body_label || bodyLabel(item);
+
     await openForm(session);
     if (!(await selectText(session, 'f5', makeText)).ok) throw new Error(`make_option_missing:${makeText}`);
     await waitForOptions(session, 'f6');
     const model = await selectText(session, 'f6', modelText);
     if (!model?.ok) throw new Error(`model:${JSON.stringify(model)}`);
     const fields = [
-      ['f8', item.fuel_label, 'select'], ['f25', 'Употребяван', 'select'], ['f9', item.power || '', 'input'],
-      ['f12', item.price_eur, 'input'], ['f13', item.currency || 'EUR', 'select'], ['f10', item.gearbox_label, 'select'],
-      ['f11', item.body_label, 'select'], ['f31', 'Цената е с включено ДДС', 'select'], ['f16', item.mileage, 'input'],
-      ['f14', item.month_label, 'select'], ['f15', item.year, 'select'], ['f17', item.color_label, 'select'],
+      ['f8', fuelText, 'select'], ['f25', 'Употребяван', 'select'], ['f9', item.power ?? item.horsepower ?? '', 'input'],
+      ['f12', item.price_eur, 'input'], ['f13', item.currency || 'EUR', 'select'], ['f10', gearboxText, 'select'],
+      // f11 must be set before f18: choosing it is what reloads the area list.
+      ['f11', bodyText, 'select'],
+      ['f31', 'Цената е с включено ДДС', 'select'], ['f16', item.mileage, 'input'],
+      ['f14', resolveMonth(item), 'select'], ['f15', item.year, 'select'], ['f17', colourText, 'select'],
       ['f18', 'Извън страната', 'select'],
     ];
     for (const [name, value, kind] of fields) {
@@ -207,8 +203,21 @@ export async function publishOne(session, item) {
     }
     await waitForOptions(session, 'f19');
     if (!(await selectText(session, 'f19', item.country_label || 'Канада')).ok) throw new Error('country_missing');
-    if (!(await setValue(session, 'f21', item.description || DEFAULT_DESCRIPTION, 'textarea'))) throw new Error('field_missing:f21');
+    if (!(await setValue(session, 'f21', item.description ?? DEFAULT_DESCRIPTION, 'textarea'))) throw new Error('field_missing:f21');
     if (!(await setValue(session, 'f22', CONTACT_PHONE, 'input'))) throw new Error('field_missing:f22');
+
+    // Read back the checked fields before submitting. A mismatch means the page
+    // refused a value, and submitting anyway would create a half-filled listing.
+    const readback = await evaluate(session, `(() => {
+      const f = document.forms.namedItem("pub")
+      return {
+        f9: f.elements.f9?.value ?? null, f12: f.elements.f12?.value ?? null, f13: f.elements.f13?.value ?? null,
+        f16: f.elements.f16?.value ?? null, f18: f.elements.f18?.value ?? null, f19: f.elements.f19?.value ?? null,
+        f22: f.elements.f22?.value ?? null,
+      }
+    })()`);
+    result.pre_submit = readback;
+    if (readback.f22 !== CONTACT_PHONE) throw new Error(`pre_submit_mismatch:f22 (${readback.f22})`);
 
     const submitted = await evaluate(session, `(() => {
       const f = document.forms.namedItem("pub")
@@ -224,14 +233,20 @@ export async function publishOne(session, item) {
       if (step2) break;
       await sleep(500);
     }
-    if (!step2) throw new Error('step2_not_reached');
+    if (!step2) {
+      // The report records the body tail as the available step-1 diagnostic.
+      const tail = await evaluate(session, '(document.body?.innerText || "").slice(-1000)').catch(() => '');
+      throw new Error(`step2_not_reached: ${tail}`);
+    }
 
-    const staged = await item.stageImages();
+    const staged = await item.stageImages(item.source_images || []);
     if (!staged.length) throw new Error('no_usable_images');
-    const documentNode = await session.send('DOM.getDocument', { depth: -1, pierce: true });
-    const input = await session.send('DOM.querySelector', { nodeId: documentNode.root.nodeId, selector: 'input[type="file"]' });
-    if (!input.nodeId) throw new Error('file_input_missing');
-    await session.send('DOM.setFileInputFiles', { nodeId: input.nodeId, files: staged });
+    // The proven flow staged files onto the browser machine through a gateway
+    // this build does not have. Playwright's setInputFiles carries the bytes to
+    // a remote browser over CDP directly, which is the equivalent operation.
+    const fileInput = session.page.locator('input[type="file"]').first();
+    if (await fileInput.count() === 0) throw new Error('file_input_missing');
+    await fileInput.setInputFiles(staged);
 
     let attached = 0;
     for (let i = 0; i < 180; i += 1) {
@@ -248,7 +263,10 @@ export async function publishOne(session, item) {
     await sleep(7000);
 
     const listing = await evaluate(session, `(() => { const e = [...document.querySelectorAll("a")].find((e) => (e.innerText || "").trim() === "Преглед на обявата"); return { url: e?.href || null } })()`);
-    if (!listing?.url) throw new Error('no_public_listing_link');
+    if (!listing?.url) {
+      const tail = await evaluate(session, '(document.body?.innerText || "").slice(-1200)').catch(() => '');
+      throw new Error(`no_public_listing_link: ${tail}`);
+    }
     result.listing_url = listing.url;
     result.public_photo_check = await verifyPublicPhotos(session, listing.url, staged.length);
     result.state = result.public_photo_check?.ok ? 'published' : 'published_no_photos';
@@ -259,14 +277,15 @@ export async function publishOne(session, item) {
   return result;
 }
 
-// Opens the finished public listing and counts photos that are really loaded,
-// not just referenced. A listing with a broken carousel must not be called
-// published.
+// Opens the finished public listing and gathers the evidence the report records
+// for a verified publication: the photo line, the really loaded images, the
+// active status, the price line and the phone flag. A listing with a broken
+// carousel must not be called published.
 export async function verifyPublicPhotos(session, url, expected) {
   await session.send('Page.navigate', { url });
   await sleep(10000);
   await sleep(500);
-  return evaluate(session, `(() => {
+  const photos = await evaluate(session, `(() => {
     const photoLines = [...document.body.innerText.matchAll(/\\b(\\d+)\\s*\\/\\s*(\\d+)\\b/g)].map((m) => ({ visible: Number(m[1]), total: Number(m[2]) }))
     const sourceImages = [...document.querySelectorAll("img.carouselimg")]
       .map((image) => image.dataset.src || image.currentSrc || image.src)
@@ -287,4 +306,21 @@ export async function verifyPublicPhotos(session, url, expected) {
       ok: uniqueSourceImages.length >= 1 && realLoadedImages >= 1 && maxPhotoTotal >= Number(${JSON.stringify(expected)})
     }
   })()`);
+
+  const evidence = await evaluate(session, `(() => {
+    const text = (document.body.innerText || "").replace(/\\s+/g, " ")
+    const priceMatch = text.match(/(\\d[\\d\\s.,]{2,})\\s*€/)
+    const phoneOnPage = /0\\d{9}/.test(text.replace(/\\s+/g, ''))
+    const inactive = /неактивна|изтрита|не е налична|обявата не е намерена/i.test(text)
+    return {
+      title: document.title,
+      price_line: priceMatch ? priceMatch[0].trim() : null,
+      phone: phoneOnPage,
+      active: !inactive && text.length > 200,
+    }
+  })()`);
+
+  // Internal success is not enough: a public URL, an active page and real
+  // photos are what the report accepts as proof.
+  return { ...photos, ...evidence, ok: photos.ok && evidence.active };
 }
