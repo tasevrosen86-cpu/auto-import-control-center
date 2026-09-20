@@ -110,6 +110,16 @@ jobs:
           APP_DIR="/home/ubuntu/auto-import-control-center"
           PUBLISHER_DIR="$APP_DIR/services/mobile-publisher"
 
+          # Recover from an interrupted pre-release browser-view deployment.
+          # The active Nginx process is untouched until nginx -t succeeds.
+          for AICC_BACKUP in /etc/nginx/sites-enabled/*.aicc-browser-backup; do
+            [ -e "$AICC_BACKUP" ] || continue
+            AICC_TARGET="${AICC_BACKUP%.aicc-browser-backup}"
+            sudo cp -p "$AICC_BACKUP" "$AICC_TARGET"
+            sudo rm -f "$AICC_BACKUP"
+          done
+          sudo nginx -t
+
           mkdir -p /tmp/auto-import-control-center-dist
           tar -xzf /tmp/dist.tar.gz -C /tmp/auto-import-control-center-dist
           sudo cp -a /tmp/auto-import-control-center-dist/. /var/www/html/
@@ -436,7 +446,8 @@ jobs:
             echo "::error::Nginx virtual host serving /var/www/html was not found."
             exit 1
           fi
-          sudo cp -p "$AICC_SITE_CONF" "$AICC_SITE_CONF.aicc-browser-backup"
+          AICC_SITE_BACKUP="/tmp/aicc-nginx-site-before-browser.conf"
+          sudo cp -p "$AICC_SITE_CONF" "$AICC_SITE_BACKUP"
           sudo python3 - "$AICC_SITE_CONF" <<'PY'
           import re, sys
           path = sys.argv[1]
@@ -465,11 +476,12 @@ jobs:
               open(path, 'w', encoding='utf-8').write(text)
           PY
           if ! sudo nginx -t; then
-            sudo cp -p "$AICC_SITE_CONF.aicc-browser-backup" "$AICC_SITE_CONF"
+            sudo cp -p "$AICC_SITE_BACKUP" "$AICC_SITE_CONF"
+            sudo rm -f "$AICC_SITE_BACKUP"
             sudo nginx -t
             exit 1
           fi
-          sudo rm -f "$AICC_SITE_CONF.aicc-browser-backup"
+          sudo rm -f "$AICC_SITE_BACKUP"
           sudo systemctl reload nginx
           REMOTE_SCRIPT
 
