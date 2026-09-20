@@ -24,6 +24,48 @@ async function stopActive() {
   clearTimeout(current.timer);
   await stopBrowser(current.id).catch(() => undefined);
 }
+async function loggedIn(page) {
+  return page.evaluate(() => Boolean(document.forms.namedItem('pub')?.elements.namedItem('f5'))).catch(() => false);
+}
+async function signInOnce(page) {
+  const username = String(process.env.PUBLICATIONS_MOBILE_BG_USERNAME || '').trim();
+  const password = String(process.env.PUBLICATIONS_MOBILE_BG_PASSWORD || '');
+  if (!username || !password) return 'credentials_not_configured';
+  if (await loggedIn(page)) return 'already_logged_in';
+
+  const directLogin = page.getByRole('link', { name: /^Вход$/ }).first();
+  if (await directLogin.count()) {
+    await directLogin.click();
+    await page.waitForTimeout(1000);
+  }
+  const passwordInput = page.locator('input[type="password"]:visible').first();
+  if (!(await passwordInput.count())) return 'login_form_not_found';
+
+  const inputs = page.locator('input:visible');
+  const count = await inputs.count();
+  let userIndex = -1;
+  for (let index = 0; index < count; index += 1) {
+    const input = inputs.nth(index);
+    const name = [await input.getAttribute('name'), await input.getAttribute('id'), await input.getAttribute('type')]
+      .filter(Boolean).join(' ').toLowerCase();
+    if (/user|email|mail|login|nick/.test(name) && !/password/.test(name)) { userIndex = index; break; }
+  }
+  if (userIndex < 0) {
+    for (let index = 0; index < count; index += 1) {
+      const type = (await inputs.nth(index).getAttribute('type') || 'text').toLowerCase();
+      if (type === 'text' || type === 'email') { userIndex = index; break; }
+    }
+  }
+  if (userIndex < 0) return 'username_field_not_found';
+
+  await inputs.nth(userIndex).fill(username);
+  await passwordInput.fill(password);
+  await passwordInput.press('Enter');
+  await page.waitForTimeout(2500);
+  await page.goto(entryUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+  await page.waitForTimeout(1500);
+  return (await loggedIn(page)) ? 'logged_in' : 'login_not_confirmed';
+}
 async function openLiveBrowser() {
   await stopActive();
   const created = await createBrowser();
@@ -31,11 +73,13 @@ async function openLiveBrowser() {
     await stopBrowser(created.id).catch(() => undefined);
     throw new Error('Browser Use не върна адрес за видимия браузър.');
   }
+  let login = 'not_attempted';
   try {
     const browser = await chromium.connectOverCDP(created.cdpUrl);
     const context = browser.contexts()[0] || await browser.newContext();
     const page = context.pages()[0] || await context.newPage();
     await page.goto(entryUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+    login = await signInOnce(page);
     await browser.close();
   } catch (error) {
     await stopBrowser(created.id).catch(() => undefined);
@@ -43,7 +87,7 @@ async function openLiveBrowser() {
   }
   const timer = setTimeout(() => void stopActive(), lifetimeMs);
   active = { id: created.id, timer };
-  return created.liveUrl;
+  return { liveUrl: created.liveUrl, login };
 }
 
 const server = http.createServer(async (request, response) => {
@@ -52,8 +96,8 @@ const server = http.createServer(async (request, response) => {
     return;
   }
   try {
-    const liveUrl = await openLiveBrowser();
-    json(response, 200, { live_url: liveUrl, expires_in_seconds: Math.floor(lifetimeMs / 1000) });
+    const opened = await openLiveBrowser();
+    json(response, 200, { live_url: opened.liveUrl, login: opened.login, expires_in_seconds: Math.floor(lifetimeMs / 1000) });
   } catch (error) {
     console.error('Browser Use manual access failed:', error instanceof Error ? error.message : error);
     json(response, 502, { error: 'Неуспешно отваряне на Browser Use браузъра. Проверете Browser Use профила и наличния баланс.' });
