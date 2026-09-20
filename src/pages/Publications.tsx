@@ -73,6 +73,9 @@ export function Publications(){
     setNotice('Готовата чернова е запазена в „Публикации“ с полета, снимки и ръчна EUR цена.');void load();
   }
   async function openMobileBrowser(){
+    // Open synchronously from the user click so Android Chrome cannot treat the
+    // Browser Use view as an unwanted popup after the protected request returns.
+    const liveWindow=window.open('about:blank','_blank');
     setBusy(true);setError('');setNotice('');
     const {data:sessionData}=await supabase.auth.getSession();
     if(!sessionData.session?.access_token){setBusy(false);setError('Сесията е изтекла. Влезте отново в сайта.');return;}
@@ -88,9 +91,9 @@ export function Publications(){
       const response=await fetch(accessUrl,{method:'POST',credentials:'same-origin',cache:'no-store'});
       const payload=await response.json().catch(()=>null);
       const liveUrl=typeof payload?.live_url==='string'?payload.live_url:'';
-      if(!response.ok||!liveUrl){setError(payload?.error||'Browser Use не отвори браузърната сесия.');return;}
+      if(!response.ok||!liveUrl){liveWindow?.close();setError(payload?.error||'Browser Use не отвори браузърната сесия.');return;}
       setNotice('Browser Use е отворен в нов раздел. Влезте ръчно в Mobile.bg; паролата не минава през сайта.');
-      window.open(liveUrl,'_blank','noopener,noreferrer');
+      if(liveWindow) liveWindow.location.assign(liveUrl); else window.location.assign(liveUrl);
     }catch{
       setError('Неуспешна връзка със защитения Browser Use достъп.');
     }
