@@ -44,3 +44,6 @@ end;
 $$;
 revoke all on function public.claim_publication_publish_job(text) from public;
 grant execute on function public.claim_publication_publish_job(text) to service_role;
+
+
+grant select, insert, update on table public.publication_publish_jobs to authenticated;
