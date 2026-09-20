@@ -87,7 +87,7 @@ jobs:
             printf 'PUBLICATIONS_CONTACT_PHONE=%s\n' "${PUBLICATIONS_CONTACT_PHONE:-0887353653}"
             printf 'PUBLICATIONS_DESCRIPTION=%s\n' "${PUBLICATIONS_DESCRIPTION:-!!!реална крайна цена!!!}"
             printf 'PUBLICATIONS_WORKER_NAME=%s\n' 'aicc-publications-publisher'
-            printf 'PUBLICATIONS_BROWSER_MODE=%s\n' 'cdp'
+            printf 'PUBLICATIONS_BROWSER_MODE=%s\n' 'browser_use'
             printf 'PUBLICATIONS_CDP_URL=%s\n' 'http://127.0.0.1:9222'
             printf 'PUBLICATIONS_CHROME_EXECUTABLE_PATH=%s\n' "$PUBLICATIONS_CHROME_EXECUTABLE_PATH"
             printf 'PUBLICATIONS_CHROME_USER_DATA_DIR=%s\n' '/home/ubuntu/.local/share/aicc-publications-chrome'
