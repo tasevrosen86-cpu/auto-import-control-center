@@ -424,9 +424,16 @@ jobs:
             proxy_pass https://cgftjqwebvddtsbcbeml.supabase.co/functions/v1/publication-browser-access/validate;
           }
           NGINX
-          AICC_SITE_CONF="$(sudo nginx -T 2>&1 | awk '/^# configuration file / {p=$4; sub(/:$/, "", p)} /server_name .*autoimportcontrolcenter\\.biz/ {print p; exit}')"
+          # Some VPS images use the default server name, so locate the active
+          # site by its actual document root rather than by an assumed filename.
+          AICC_SITE_CONF="$(sudo nginx -T 2>&1 | awk '/^# configuration file / {p=$4; sub(/:$$/, "", p)} /root[[:space:]]+\\/var\\/www\\/html/ {print p; exit}')"
           if [ -z "$AICC_SITE_CONF" ] || [ ! -f "$AICC_SITE_CONF" ]; then
-            echo "::error::Nginx virtual host for autoimportcontrolcenter.biz was not found."
+            for CANDIDATE in /etc/nginx/sites-enabled/default /etc/nginx/sites-available/default; do
+              if [ -f "$CANDIDATE" ]; then AICC_SITE_CONF="$CANDIDATE"; break; fi
+            done
+          fi
+          if [ -z "$AICC_SITE_CONF" ] || [ ! -f "$AICC_SITE_CONF" ]; then
+            echo "::error::Nginx virtual host serving /var/www/html was not found."
             exit 1
           fi
           sudo cp -p "$AICC_SITE_CONF" "$AICC_SITE_CONF.aicc-browser-backup"
@@ -448,11 +455,12 @@ jobs:
                           if depth == 0:
                               end = index
                               break
-                  if end is not None and re.search(r'server_name\\s+[^;]*autoimportcontrolcenter\\.biz', text[match.start():end], re.I):
+                  block = text[match.start():end] if end is not None else ''
+                  if end is not None and (re.search(r'server_name\\s+[^;]*autoimportcontrolcenter\\.biz', block, re.I) or re.search(r'root\\s+\\/var\\/www\\/html', block, re.I)):
                       selected = end
                       break
               if selected is None:
-                  raise SystemExit('AICC server block was not found in ' + path)
+                  raise SystemExit('AICC server block serving the web site was not found in ' + path)
               text = text[:selected] + '\\n    ' + marker + '\\n' + text[selected:]
               open(path, 'w', encoding='utf-8').write(text)
           PY
