@@ -114,8 +114,15 @@ jobs:
               break
             fi
           done
+          # Existing production deployments name the intake worker
+          # snapd.autoimport.service. Keep it as a narrowly scoped fallback:
+          # do not ever select either Mobile.bg publisher service here.
+          if [ -z "$SOURCE_INTAKE_UNIT" ] && sudo systemctl cat snapd.autoimport.service >/dev/null 2>&1; then
+            SOURCE_INTAKE_UNIT="snapd.autoimport.service"
+            echo "Using existing URL intake worker unit: $SOURCE_INTAKE_UNIT"
+          fi
           if [ -z "$SOURCE_INTAKE_UNIT" ]; then
-            echo "::error::URL intake worker unit was not found by its working directory."
+            echo "::error::URL intake worker unit was not found on the server."
             echo "Candidate units:"
             systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '$1 ~ /(source|intake|worker|import)/ {print $1}' || true
             exit 1
