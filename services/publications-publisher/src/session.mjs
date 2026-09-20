@@ -15,7 +15,7 @@
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createBrowser, stopBrowser, browserUseApiConfigured } from './browser_use.mjs';
+import { createBrowser, stopBrowser, browserUseApiConfigured, profileName } from './browser_use.mjs';
 
 const GATEWAY_URL = process.env.V4_GATEWAY_URL || process.env.BROWSER_GATEWAY_URL;
 const RUN_ID = process.env.V4_RUN_ID || process.env.BROWSER_RUN_ID;
@@ -34,7 +34,7 @@ function gatewayUrl(path) {
 }
 
 export function describeTransport() {
-  if (browserUseApiConfigured()) return { transport: 'browser-use-remote' };
+  if (browserUseApiConfigured()) return { transport: 'browser-use-remote', profile: profileName() };
   if (gatewayConfigured()) return { transport: 'browser-use-gateway', gateway: GATEWAY_URL };
   return {
     transport: 'local',
@@ -42,18 +42,30 @@ export function describeTransport() {
   };
 }
 
-// Downloads the photos to this machine, which only helps the transports whose
-// browser runs locally: the remote browser cannot read our filesystem.
-async function downloadImages(urls) {
+// Downloads the source photos to this machine and returns local paths. Both the
+// local and the remote transport end up handing files to a file input, so the
+// difference is only where the file has to travel to.
+//
+// The report records the source images as AutoTrader URLs that are fetched and
+// turned into JPEG files; sending the source URL straight to Mobile.bg is
+// explicitly forbidden, and a 404 skips that one image rather than the run.
+async function downloadImages(urls, limit = 17) {
   const dir = await mkdtemp(join(tmpdir(), 'publication-images-'));
   const paths = [];
-  for (let i = 0; i < urls.length; i += 1) {
+  const skipped = [];
+  for (let i = 0; i < Math.min(urls.length, limit); i += 1) {
     const response = await fetch(urls[i]);
-    if (!response.ok) continue;
+    if (!response.ok) {
+      // The report distinguishes these two: a 404 drops that one photo, any
+      // other status stops the run so a broken source is not published.
+      if (response.status === 404) { skipped.push({ index: i, status: 404, url: urls[i] }); continue; }
+      throw new Error(`image_http_${response.status}`);
+    }
     const path = join(dir, `${String(i + 1).padStart(2, '0')}.jpg`);
     await writeFile(path, Buffer.from(await response.arrayBuffer()));
     paths.push(path);
   }
+  if (skipped.length) console.log(`[info] пропуснати снимки: ${JSON.stringify(skipped)}`);
   return paths;
 }
 
@@ -61,22 +73,36 @@ export async function remoteSession() {
   if (!browserUseApiConfigured()) throw new Error('Липсва BROWSER_USE_API_KEY в средата на сървъра.');
   const { chromium } = await import('playwright');
   const created = await createBrowser();
-  const connection = await chromium.connectOverCDP(created.cdpUrl);
+  let connection;
+  try {
+    connection = await chromium.connectOverCDP(created.cdpUrl);
+  } catch (error) {
+    // A browser we cannot attach to is a browser we must not leave running: it
+    // would keep billing and hold the live view open.
+    await stopBrowser(created.id).catch(() => undefined);
+    throw error;
+  }
   const context = connection.contexts()[0] || await connection.newContext();
   const page = context.pages()[0] || await context.newPage();
-  const cdp = await context.newCDPSession(page);
+  // One CDP session, created once: the report warns that stale node and object
+  // handles must not be reused, but that is about handles within a session, not
+  // about opening a fresh session per call.
+  let cdpPromise = null;
+  const cdp = () => (cdpPromise ||= context.newCDPSession(page));
   return {
     transport: 'browser-use-remote',
     browserId: created.id,
     liveUrl: created.liveUrl,
     page,
-    send: (method, params) => cdp.send(method, params),
+    send: async (method, params) => (await cdp()).send(method, params),
     async stageImages(urls) { return downloadImages(urls); },
     async close() {
       await connection.close().catch(() => undefined);
-      // Leaving the remote browser running would keep billing and hold the live
-      // view open, so it is stopped explicitly.
-      await stopBrowser(created.id).catch(() => undefined);
+      // The report keeps the profile for reuse by default; a throwaway browser
+      // is stopped so it does not bill or hold the live view open.
+      if (process.env.BROWSER_USE_KEEP_BROWSER !== 'true') {
+        await stopBrowser(created.id).catch(() => undefined);
+      }
     },
   };
 }
@@ -95,28 +121,7 @@ export async function gatewaySession() {
       if (!response.ok) throw new Error(`Шлюзът отказа ${method}: ${JSON.stringify(data).slice(0, 300)}`);
       return data.result ?? data;
     },
-    // The proven script shipped photos this way, because the browser runs
-    // elsewhere and cannot see our filesystem.
-    async stageImages(urls) {
-      const paths = [];
-      for (let start = 0; start < urls.length; start += 10) {
-        const form = new FormData();
-        for (let i = start; i < Math.min(start + 10, urls.length); i += 1) {
-          const response = await fetch(urls[i]);
-          if (!response.ok) continue;
-          const bytes = await response.arrayBuffer();
-          form.append('files', new File([bytes], `${String(i + 1).padStart(2, '0')}.jpg`, { type: 'image/jpeg' }));
-        }
-        if (!form.has('files')) continue;
-        const response = await fetch(gatewayUrl(UPLOAD_PATH), {
-          method: 'POST', headers: { authorization: `Bearer ${RUN_TOKEN}` }, body: form,
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(`Качването през шлюза отказа: ${JSON.stringify(data).slice(0, 300)}`);
-        paths.push(...(data.staged || []).map((file) => file.browser?.path).filter(Boolean));
-      }
-      return paths;
-    },
+    async stageImages(urls) { return downloadImages(urls); },
     async close() {},
   };
 }
@@ -125,9 +130,11 @@ export async function localSession() {
   const { chromium } = await import('playwright');
   const browser = await chromium.launch({ headless: process.env.PUBLICATIONS_HEADLESS !== 'false' });
   const page = await browser.newPage();
-  const cdp = await page.context().newCDPSession(page);
+  const context = page.context();
+  const cdp = await context.newCDPSession(page);
   return {
     transport: 'local',
+    page,
     send: (method, params) => cdp.send(method, params),
     async stageImages(urls) { return downloadImages(urls); },
     async close() { await browser.close(); },
@@ -141,3 +148,5 @@ export async function openSession() {
   if (gatewayConfigured()) return gatewaySession();
   return localSession();
 }
+
+export { downloadImages };
