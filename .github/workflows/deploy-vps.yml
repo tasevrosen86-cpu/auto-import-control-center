@@ -64,6 +64,8 @@ jobs:
           BROWSER_USE_PROFILE: ${{ secrets.BROWSER_USE_PROFILE }}
           PUBLICATIONS_CONTACT_PHONE: ${{ secrets.PUBLICATIONS_CONTACT_PHONE }}
           PUBLICATIONS_DESCRIPTION: ${{ secrets.PUBLICATIONS_DESCRIPTION }}
+          PUBLICATIONS_CDP_URL: ${{ secrets.PUBLICATIONS_CDP_URL }}
+          PUBLICATIONS_CHROME_EXECUTABLE_PATH: ${{ secrets.PUBLICATIONS_CHROME_EXECUTABLE_PATH }}
         run: |
           umask 077
           if [ -z "$BROWSER_USE_API_KEY" ]; then
@@ -77,6 +79,11 @@ jobs:
             printf 'PUBLICATIONS_CONTACT_PHONE=%s\n' "${PUBLICATIONS_CONTACT_PHONE:-0887353653}"
             printf 'PUBLICATIONS_DESCRIPTION=%s\n' "${PUBLICATIONS_DESCRIPTION:-!!!реална крайна цена!!!}"
             printf 'PUBLICATIONS_WORKER_NAME=%s\n' 'aicc-publications-publisher'
+            printf 'PUBLICATIONS_BROWSER_MODE=%s\n' 'cdp'
+            printf 'PUBLICATIONS_CDP_URL=%s\n' "$PUBLICATIONS_CDP_URL"
+            printf 'PUBLICATIONS_CHROME_EXECUTABLE_PATH=%s\n' "$PUBLICATIONS_CHROME_EXECUTABLE_PATH"
+            printf 'PUBLICATIONS_CHROME_USER_DATA_DIR=%s\n' '/home/ubuntu/.local/share/aicc-publications-chrome'
+            printf 'PUBLICATIONS_REAL_PUBLISH_ENABLED=%s\n' 'false'
           } > publications.env
 
       - name: Upload and activate website, workers and publisher
@@ -232,7 +239,7 @@ jobs:
           NODE_BIN="$(command -v node)"
           sudo tee /etc/systemd/system/aicc-publications.service >/dev/null <<UNIT
           [Unit]
-          Description=AICC Publications publisher (Browser Use session)
+          Description=AICC Publications publisher (self-hosted Chrome first)
           After=network-online.target
           Wants=network-online.target
 
@@ -273,7 +280,7 @@ jobs:
             echo "::warning::BROWSER_USE_API_KEY is empty in /etc/aicc-publications.env."
           fi
 
-          # The queue and Browser Use gate must pass first. Until then the
+          # The queue and self-hosted Chrome gate must pass first. Until then the
           # publisher is installed but stopped, so no failing run repeats every minute.
           sudo systemctl disable --now aicc-publications.timer || true
           echo "Publications timer is installed but intentionally stopped until queue verification."
