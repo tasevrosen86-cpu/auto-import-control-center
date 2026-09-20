@@ -39,7 +39,12 @@ export function Publications() {
   async function importUrl() {
     if (!url.trim()) { setError('Поставете линк към AutoTrader или Encar.'); return; }
     setBusy(true); setError(''); setNotice('');
-    const { data, error: invokeError } = await supabase.functions.invoke('queue-publication-url', { body: { source_url: url.trim() } });
+    const { data: sessionData } = await supabase.auth.getSession();
+    if (!sessionData.session?.access_token) { setBusy(false); setError('Сесията е изтекла. Влезте отново в сайта.'); return; }
+    const { data, error: invokeError } = await supabase.functions.invoke('queue-publication-url', {
+      body: { source_url: url.trim() },
+      headers: { Authorization: `Bearer ${sessionData.session.access_token}` },
+    });
     setBusy(false);
     if (invokeError || data?.error) {
       let detail = data?.error as string | undefined;
@@ -56,7 +61,12 @@ export function Publications() {
     if (!draft) return;
     setBusy(true); setError(''); setNotice('');
     const priceEur = Number(price.replace(',', '.'));
-    const { data, error: invokeError } = await supabase.functions.invoke('prepare-publication-draft', { body: { draft_id: draft.id, price_eur: priceEur } });
+    const { data: sessionData } = await supabase.auth.getSession();
+    if (!sessionData.session?.access_token) { setBusy(false); setError('Сесията е изтекла. Влезте отново в сайта.'); return; }
+    const { data, error: invokeError } = await supabase.functions.invoke('prepare-publication-draft', {
+      body: { draft_id: draft.id, price_eur: priceEur },
+      headers: { Authorization: `Bearer ${sessionData.session.access_token}` },
+    });
     setBusy(false);
     if (invokeError || data?.error) {
       let detail = data?.error as string | undefined;
