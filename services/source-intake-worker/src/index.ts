@@ -455,9 +455,10 @@ async function updateJob(job: SourceJob, values: Record<string, unknown>) {
   if (error) throw error;
 }
 async function claimFrom(table: 'source_listing_jobs' | 'publication_source_jobs', flow: 'ads' | 'publications'): Promise<SourceJob | null> {
-  const columns = table === 'source_listing_jobs'
-    ? 'id,draft_id,source_type,source_url,attempt_count'
-    : 'id,source_type,source_url,attempt_count';
+  // Both queues already create their parent draft before queuing. Keep draft_id
+  // in the claimed Publications job too, otherwise the ingester tries to create
+  // a second ownerless draft instead of completing the queued one.
+  const columns = 'id,draft_id,source_type,source_url,attempt_count';
   const { data, error } = await db.from(table).select(columns).eq('status', 'QUEUED').order('created_at').limit(1).maybeSingle();
   if (error || !data) return null;
   const { data: claimed, error: updateError } = await db.from(table)
