@@ -351,9 +351,9 @@ jobs:
           # Supabase configuration. It never fills or submits a listing.
           sudo tee /etc/systemd/system/aicc-publications-browser-test.service >/dev/null <<UNIT
           [Unit]
-          Description=AICC Publications self-hosted browser probe
-          Requires=aicc-publications-browser.service
-          After=aicc-publications-browser.service
+          Description=AICC Publications Browser Use probe
+          After=network-online.target
+          Wants=network-online.target
           [Service]
           Type=oneshot
           User=ubuntu
@@ -363,8 +363,28 @@ jobs:
           TimeoutStartSec=120
           UNIT
 
+          # Browser Use is the only visible browser for Publications. The old
+          # VPS Chrome/VNC services stay disabled: Mobile.bg blocks the VPS IP.
+          sudo tee /etc/systemd/system/aicc-publications-browser-access.service >/dev/null <<UNIT
+          [Unit]
+          Description=AICC Publications Browser Use live access bridge
+          After=network-online.target
+          Wants=network-online.target
+          [Service]
+          Type=simple
+          User=ubuntu
+          WorkingDirectory=$PUBLICATIONS_DIR
+          EnvironmentFile=/etc/aicc-publications.env
+          ExecStart=$NODE_BIN src/browser-access-server.mjs
+          Restart=on-failure
+          RestartSec=3
+          [Install]
+          WantedBy=multi-user.target
+          UNIT
+
           sudo systemctl daemon-reload
-          sudo systemctl enable --now aicc-publications-display.service aicc-publications-browser.service aicc-publications-vnc.service aicc-publications-vnc-web.service
+          sudo systemctl disable --now aicc-publications-display.service aicc-publications-browser.service aicc-publications-vnc.service aicc-publications-vnc-web.service || true
+          sudo systemctl enable --now aicc-publications-browser-access.service
           if ! sudo systemctl start aicc-publications-browser-test.service; then
             sudo journalctl -u aicc-publications-browser-test.service -n 100 --no-pager
             exit 1
@@ -396,6 +416,20 @@ jobs:
           # before serving the VNC page or WebSocket.
           sudo mkdir -p /etc/nginx/snippets
           sudo tee /etc/nginx/snippets/aicc-publications-browser.conf >/dev/null <<'NGINX'
+          # The browser is created only after this signed, Admin-only request.
+          # The response is a temporary Browser Use live URL; the API key stays on
+          # the VPS and no local Chrome/VNC is used.
+          location = /publications-browser/open {
+            access_log off;
+            auth_request /_aicc_publications_browser_auth;
+            proxy_pass http://127.0.0.1:6081/open;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_buffering off;
+            add_header Cache-Control "no-store" always;
+          }
           location = /publications-browser/vnc.html {
             access_log off;
             auth_request /_aicc_publications_browser_auth;
