@@ -23,6 +23,10 @@ export function profileName() {
   return process.env.BROWSER_USE_PROFILE || 'mobilebg-publisher';
 }
 
+export function profileId() {
+  return String(process.env.BROWSER_PROFILE_ID || '').trim();
+}
+
 function headers(key, json = false) {
   return json
     ? { 'X-Browser-Use-API-Key': key, 'Content-Type': 'application/json' }
@@ -39,6 +43,8 @@ function headers(key, json = false) {
 export async function resolveProfile() {
   const key = process.env.BROWSER_USE_API_KEY;
   if (!key) throw new Error('Липсва BROWSER_USE_API_KEY в средата на сървъра.');
+  const configuredId = profileId();
+  if (configuredId) return configuredId;
   const name = profileName();
 
   const list = await fetch(`${API_BASE}${PROFILES_PATH}`, { headers: headers(key) });
@@ -51,19 +57,7 @@ export async function resolveProfile() {
   const items = Array.isArray(data) ? data : (data.items || data.profiles || []);
   const existing = items.find((profile) => profile?.name === name);
   if (existing?.id) return existing.id;
-
-  const created = await fetch(`${API_BASE}${PROFILES_PATH}`, {
-    method: 'POST', headers: headers(key, true), body: JSON.stringify({ name }),
-  });
-  const createdText = await created.text();
-  if (!created.ok) {
-    throw new Error(`Browser Use отказа създаването на профил: HTTP ${created.status} ${createdText.slice(0, 200)}`);
-  }
-  let profile = {};
-  try { profile = JSON.parse(createdText); } catch { /* checked below */ }
-  const id = profile.id || profile.profile?.id;
-  if (!id) throw new Error(`Профилът не върна id. Получени полета: ${Object.keys(profile).join(', ') || '(няма)'}`);
-  return id;
+  throw new Error(`Browser Use профилът "${name}" не е намерен. Няма да бъде създаден автоматично.`);
 }
 
 // The response shape is confirmed against the live service: a flat object with
