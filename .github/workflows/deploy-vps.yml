@@ -391,8 +391,8 @@ jobs:
           fi
           echo "Publications browser probe result:"
           sudo journalctl -u aicc-publications-browser-test.service -n 30 --no-pager
-          echo "Publications Chrome service state:"
-          sudo systemctl --no-pager --full status aicc-publications-browser.service | sed -n '1,25p'
+          echo "Publications Browser Use access service state:"
+          sudo systemctl --no-pager --full status aicc-publications-browser-access.service | sed -n '1,25p' || true
 
           # The environment file holds the Browser Use token, so a readable
           # permission is a leak. Refuse to start rather than run with it exposed.
