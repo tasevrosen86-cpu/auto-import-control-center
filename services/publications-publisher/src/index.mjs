@@ -44,6 +44,7 @@ async function finish(job, status, details, error) {
     mobilebg_url: details.listing_url || null,
     finished_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
+    ...(details.payload ? { payload: details.payload } : {}),
   }).eq('id', job.id);
   await db.from('publication_results').insert({
     job_id: job.id,
@@ -91,68 +92,152 @@ export async function browserTest() {
   }
 }
 
-async function prepare(job) {
-  const payload = job.payload || {};
-  // The specification re-checks the draft in the backend rather than trusting
-  // the frontend, and a job that fails here never reaches a browser.
+function draftValue(fields, ...keys) {
+  for (const key of keys) {
+    const value = fields.get(key);
+    if (value !== null && value !== undefined && String(value).trim()) return String(value).trim();
+  }
+  return '';
+}
+function draftNumber(value) {
+  const digits = String(value || '').replace(/[^0-9]/g, '');
+  return digits ? Number(digits) : null;
+}
+function draftFuel(value) {
+  const text = String(value || '').toLowerCase();
+  if (text.includes('дизел') || text.includes('diesel')) return 'diesel';
+  if (text.includes('хибрид') || text.includes('hybrid')) return 'hybrid';
+  if (text.includes('електр') || text.includes('electric')) return 'electric';
+  if (text.includes('бенз') || text.includes('gas') || text.includes('petrol')) return 'petrol';
+  return '';
+}
+function draftTransmission(value) {
+  const text = String(value || '').toLowerCase();
+  if (text.includes('полу') || text.includes('semi')) return 'semi-automatic';
+  if (text.includes('автомат') || text.includes('automatic')) return 'automatic';
+  if (text.includes('ръчна') || text.includes('manual')) return 'manual';
+  return '';
+}
+function draftColor(value) {
+  const text = String(value || '').toLowerCase();
+  const found = [['сив','grey'],['gray','grey'],['черен','black'],['black','black'],['бял','white'],['white','white'],['среб','silver'],['silver','silver'],['син','blue'],['blue','blue'],['червен','red'],['red','red'],['кафяв','brown'],['brown','brown'],['зелен','green'],['green','green'],['беж','beige'],['beige','beige'],['оранж','orange'],['orange','orange'],['злат','gold'],['gold','gold']].find((pair) => text.includes(pair[0]));
+  return found ? found[1] : '';
+}
+function draftBody(value) {
+  const text = String(value || '').toLowerCase();
+  const found = [['джип','large_suv'],['suv','large_suv'],['седан','sedan'],['sedan','sedan'],['комби','wagon'],['wagon','wagon'],['хечбек','hatchback'],['hatch','hatchback'],['купе','coupe'],['coupe','coupe'],['кабрио','convertible'],['convertible','convertible'],['пикап','pickup'],['pickup','pickup'],['ван','van'],['minivan','van']].find((pair) => text.includes(pair[0]));
+  return found ? found[1] : '';
+}
+
+// Freeze the ready direct-URL draft into the publication job. The catalogue is
+// intentionally not queried or required here.
+async function materializeReadyDraft(job) {
+  const draftId = String(job.payload?.draft_id || '');
+  if (!draftId) throw new Error('Липсва готова чернова от директен линк.');
+
+  const { data: draft, error: draftError } = await db.from('mobile_bg_drafts')
+    .select('id,title,source_url,source_type,extraction_status,catalog_permanent_id')
+    .eq('id', draftId).single();
+  if (draftError || !draft) throw new Error('Черновата не е намерена.');
+  if (draft.catalog_permanent_id) throw new Error('Това е каталожна чернова. Publisher-ът приема само директен URL import.');
+  if (!draft.source_url || draft.extraction_status !== 'COMPLETED_NEEDS_REVIEW') {
+    throw new Error('Черновата още не е готова за публикация.');
+  }
+
+  const [{ data: fieldRows, error: fieldError }, { data: imageRows, error: imageError }] = await Promise.all([
+    db.from('mobile_bg_draft_fields').select('field_key,value').eq('draft_id', draftId),
+    db.from('mobile_bg_draft_images').select('source_url,processing_status').eq('draft_id', draftId).eq('is_selected', true).order('display_order').limit(17),
+  ]);
+  if (fieldError || imageError) throw new Error('Не могат да се прочетат подготвените полета или снимки.');
+
+  const fields = new Map((fieldRows || []).map((row) => [row.field_key, row.value]));
+  const images = (imageRows || []).filter((image) => image.source_url && image.processing_status !== 'failed').map((image) => image.source_url);
+  return {
+    draft_id: draft.id,
+    source: draft.source_type === 'autotrader_ca' ? 'autotrader.ca' : draft.source_type,
+    source_url: draft.source_url,
+    source_images: images,
+    title: draftValue(fields, 'title') || draft.title || '',
+    make: draftValue(fields, 'make'),
+    model: draftValue(fields, 'model'),
+    year: draftNumber(draftValue(fields, 'year')),
+    mileage: draftNumber(draftValue(fields, 'mileage')),
+    fuel: draftFuel(draftValue(fields, 'fuel')),
+    transmission: draftTransmission(draftValue(fields, 'gearbox', 'transmission')),
+    body: draftBody(draftValue(fields, 'body', 'body_type', 'category')),
+    color: draftColor(draftValue(fields, 'color')),
+    power: draftNumber(draftValue(fields, 'power')),
+    description: draftValue(fields, 'final_description', 'description'),
+    price_eur: Number(job.payload?.price_eur ?? draftValue(fields, 'price')),
+    currency: 'EUR',
+    month: 'Декември',
+    country_label: 'Канада',
+  };
+}
+
+async function readyPayload(job) {
+  const payload = await materializeReadyDraft(job);
   const check = preflight(payload);
   if (!check.ok) {
-    await log(job.id, 'blocked', `Preflight: ${check.failures.map((f) => f.code).join(', ')}`, 'error');
-    await finish(job, 'BLOCKED', { state: check.failures[0].code, message: check.failures.map((f) => f.message).join(' ') },
-      check.failures.map((f) => f.message).join(' '));
-    return;
+    const message = check.failures.map((failure) => failure.message).join(' ');
+    await log(job.id, 'blocked', message, 'error');
+    await finish(job, 'BLOCKED', { state: check.failures[0].code, payload, message }, message);
+    return null;
   }
   for (const note of check.notes) await log(job.id, 'preflight', note);
-
   const { data: existing } = await db.from('publication_jobs').select('payload,public_url,status').limit(200);
   if (isDuplicate(payload, existing || [])) {
-    await log(job.id, 'duplicate_skipped', `Ред ${payload.master_row} вече има активна обява.`, 'error');
-    await finish(job, 'BLOCKED', { state: 'duplicate_skipped', message: 'Редът вече е публикуван.' }, 'Редът вече има активна обява в Mobile.bg.');
-    return;
+    const message = 'За този директен линк вече има активна обява.';
+    await finish(job, 'BLOCKED', { state: 'duplicate_skipped', payload, message }, message);
+    return null;
   }
+  return payload;
+}
+
+async function prepare(job) {
+  const payload = await readyPayload(job);
+  if (!payload) return;
 
   const session = await openSession();
   try {
-    await log(job.id, 'prepare', 'Отварям формата, за да видя дали е достъпен.');
+    await log(job.id, 'prepare', 'Проверявам готовата чернова срещу Mobile.bg формата.');
     await openForm(session);
+    const login = await ensureLoggedIn(session);
     const form = await inspectForm(session);
-    await log(job.id, 'source_validated', `Форма: ${JSON.stringify(form)}`, form.form_found ? 'info' : 'error');
-    if (!form.form_found) {
-      await finish(job, 'BLOCKED', { state: 'blocked_source', message: form.body_text },
-        `Формата на Mobile.bg не се зареди (${form.control_count} полета). Страницата върна: ${form.body_text || 'нищо'}`);
+    if (login.state !== 'already_logged_in' || !form.form_found) {
+      const message = 'BrowserUse профилът няма валидна Mobile.bg сесия или формата не се зареди.';
+      await finish(job, 'BLOCKED', { state: 'session_required', payload, message }, message);
       return;
     }
-    await finish(job, 'COMPLETED', { state: 'ready', message: 'Формата е достъпна и полетата са налични.' });
+    await finish(job, 'COMPLETED', { state: 'ready', payload, message: 'Черновата е готова за реално публикуване.' });
   } finally {
     await session.close();
   }
 }
 
 async function publish(job) {
-  const payload = job.payload || {};
-  const check = preflight(payload);
-  if (!check.ok) {
-    await log(job.id, 'blocked', `Preflight: ${check.failures.map((f) => f.code).join(', ')}`, 'error');
-    await finish(job, 'BLOCKED', { state: check.failures[0].code }, check.failures.map((f) => f.message).join(' '));
-    return;
-  }
+  const payload = await readyPayload(job);
+  if (!payload) return;
 
   const session = await openSession();
   try {
-    await log(job.id, 'publish', `Публикувам ${payload.make || ''} ${payload.model || ''} (${payload.year || ''}).`);
-    if (session.liveUrl) await log(job.id, 'publish', `Наблюдение на сесията: ${session.liveUrl}`);
+    await log(job.id, 'publish', 'Публикувам готовата чернова в Mobile.bg.');
+    if (session.liveUrl) await log(job.id, 'publish', 'Наблюдение на сесията: ' + session.liveUrl);
+    await openForm(session);
+    const login = await ensureLoggedIn(session);
+    if (login.state !== 'already_logged_in') {
+      const message = 'Нужен е еднократен ръчен вход в Mobile.bg BrowserUse профила.';
+      await finish(job, 'BLOCKED', { state: 'session_required', payload, message }, message);
+      return;
+    }
     const result = await publishOne(session, {
       ...payload,
-      // Photos are fetched here and handed to the file input as local files;
-      // the source URL is never sent to Mobile.bg directly.
       stageImages: (urls) => session.stageImages(urls || payload.source_images || []),
     });
-    const published = result.state === 'published' || result.state === 'published_no_photos';
-    await finish(job, published ? 'COMPLETED' : 'FAILED', result,
-      result.state === 'failed'
-        ? result.message
-        : (result.state === 'published_no_photos' ? 'Обявата излезе, но проверката не намери снимките.' : null));
-    await log(job.id, 'publish', `Резултат: ${result.state}.`, published ? 'info' : 'error');
+    const completed = result.state === 'published' || result.state === 'published_no_photos';
+    await finish(job, completed ? 'COMPLETED' : 'FAILED', { ...result, payload },
+      result.state === 'failed' ? result.message : (result.state === 'published_no_photos' ? 'Обявата е намерена, но снимките не бяха потвърдени.' : null));
+    await log(job.id, 'publish', 'Резултат: ' + result.state + '.', completed ? 'info' : 'error');
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Непозната грешка.';
     await finish(job, 'FAILED', { state: 'failed' }, message);
