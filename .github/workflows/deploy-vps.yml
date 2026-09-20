@@ -328,9 +328,6 @@ jobs:
           WantedBy=multi-user.target
           UNIT
 
-          sudo systemctl daemon-reload
-          sudo systemctl enable --now aicc-publications-display.service aicc-publications-browser.service aicc-publications-vnc.service aicc-publications-vnc-web.service
-          sudo systemctl start aicc-publications-browser-test.service || sudo journalctl -u aicc-publications-browser-test.service -n 80 --no-pager
           # Safe transport check only. It receives the same EnvironmentFile as
           # the production worker, so it cannot accidentally run with an empty
           # Supabase configuration. It never fills or submits a listing.
@@ -347,6 +344,13 @@ jobs:
           ExecStart=$NODE_BIN src/index.mjs browser-test
           TimeoutStartSec=120
           UNIT
+
+          sudo systemctl daemon-reload
+          sudo systemctl enable --now aicc-publications-display.service aicc-publications-browser.service aicc-publications-vnc.service aicc-publications-vnc-web.service
+          if ! sudo systemctl start aicc-publications-browser-test.service; then
+            sudo journalctl -u aicc-publications-browser-test.service -n 100 --no-pager
+            exit 1
+          fi
 
           # The environment file holds the Browser Use token, so a readable
           # permission is a leak. Refuse to start rather than run with it exposed.
