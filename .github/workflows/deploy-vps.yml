@@ -53,6 +53,32 @@ jobs:
             printf 'WORKER_NAME=%s\n' 'aicc-mobile-publisher'
           } > mobile-publisher.env
 
+      # The Publications section keeps its own environment file. It is a
+      # separate secret set on purpose: the Browser Use token must never be
+      # mixed into the «Обяви» publisher, and the two flows are not meant to
+      # share a session. Values are written here, scp'd, and deleted locally, so
+      # no key reaches the repository, the frontend bundle or the build log.
+      - name: Prepare publications environment
+        env:
+          BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
+          BROWSER_USE_PROFILE: ${{ secrets.BROWSER_USE_PROFILE }}
+          PUBLICATIONS_CONTACT_PHONE: ${{ secrets.PUBLICATIONS_CONTACT_PHONE }}
+          PUBLICATIONS_DESCRIPTION: ${{ secrets.PUBLICATIONS_DESCRIPTION }}
+        run: |
+          umask 077
+          if [ -z "$BROWSER_USE_API_KEY" ]; then
+            echo "::warning::BROWSER_USE_API_KEY е празна. Публикациите ще падат на локален браузър, който Mobile.bg блокира."
+          fi
+          {
+            printf 'BROWSER_USE_API_KEY=%s\n' "$BROWSER_USE_API_KEY"
+            printf 'BROWSER_USE_PROFILE=%s\n' "${BROWSER_USE_PROFILE:-mobilebg-publisher}"
+            printf 'SUPABASE_URL=%s\n' 'https://cgftjqwebvddtsbcbeml.supabase.co'
+            printf 'SUPABASE_ANON_KEY=%s\n' 'sb_publishable_3szh1-AiAAUYDeVBwO7bJQ_gXhkBU0A'
+            printf 'PUBLICATIONS_CONTACT_PHONE=%s\n' "${PUBLICATIONS_CONTACT_PHONE:-0887353653}"
+            printf 'PUBLICATIONS_DESCRIPTION=%s\n' "${PUBLICATIONS_DESCRIPTION:-!!!реална крайна цена!!!}"
+            printf 'PUBLICATIONS_WORKER_NAME=%s\n' 'aicc-publications-publisher'
+          } > publications.env
+
       - name: Upload and activate website, workers and publisher
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -62,7 +88,9 @@ jobs:
           tar -C dist -czf dist.tar.gz .
           tar -C services/source-intake-worker -czf worker.tar.gz src package.json
           tar -C services/mobile-publisher -czf mobile-publisher.tar.gz src package.json package-lock.json
-          scp -P "$VPS_PORT" dist.tar.gz worker.tar.gz mobile-publisher.tar.gz mobile-publisher.env "$VPS_USER@$VPS_HOST:/tmp/"
+          tar -C services/publications-publisher -czf publications-publisher.tar.gz src package.json package-lock.json
+          scp -P "$VPS_PORT" dist.tar.gz worker.tar.gz mobile-publisher.tar.gz mobile-publisher.env \
+            publications-publisher.tar.gz publications.env "$VPS_USER@$VPS_HOST:/tmp/"
 
           ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" 'bash -s' <<'REMOTE_SCRIPT'
           set -euo pipefail
@@ -85,6 +113,19 @@ jobs:
           mkdir -p /home/ubuntu/.local/share/aicc-mobile-bg
           sudo install -m 600 /tmp/mobile-publisher.env /etc/aicc-mobile-publisher.env
           rm -f /tmp/dist.tar.gz /tmp/worker.tar.gz /tmp/mobile-publisher.tar.gz /tmp/mobile-publisher.env
+
+          # The Publications publisher is a second, separate worker. It gets its
+          # own directory, its own environment file and its own timer, so a
+          # problem in one flow cannot stop the other.
+          PUBLICATIONS_DIR="$APP_DIR/services/publications-publisher"
+          mkdir -p "$PUBLICATIONS_DIR"
+          tar -xzf /tmp/publications-publisher.tar.gz -C "$PUBLICATIONS_DIR"
+          cd "$PUBLICATIONS_DIR"
+          # Playwright here is only an optional dependency used as a CDP client;
+          # the browser itself runs remotely, so no browser is downloaded.
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci --omit=dev
+          sudo install -m 600 /tmp/publications.env /etc/aicc-publications.env
+          rm -f /tmp/publications-publisher.tar.gz /tmp/publications.env
 
           SOURCE_KEY=""
           # The service role key may be exported in the unit Environment, or
@@ -155,9 +196,65 @@ jobs:
             sudo journalctl -u aicc-mobile-publisher.service -n 80 --no-pager
             exit 1
           fi
+
+          # Publications: its own unit and timer, same shape as the one above but
+          # pointing at its own directory, its own environment file and its own
+          # entry point. Nothing is shared with the «Обяви» publisher.
+          NODE_BIN="$(command -v node)"
+          sudo tee /etc/systemd/system/aicc-publications.service >/dev/null <<UNIT
+          [Unit]
+          Description=AICC Publications publisher (Browser Use session)
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=oneshot
+          User=ubuntu
+          WorkingDirectory=$PUBLICATIONS_DIR
+          EnvironmentFile=/etc/aicc-publications.env
+          ExecStart=$NODE_BIN src/index.mjs drain
+          TimeoutStartSec=900
+          Nice=10
+          UNIT
+
+          sudo tee /etc/systemd/system/aicc-publications.timer >/dev/null <<UNIT
+          [Unit]
+          Description=Run the AICC publications publisher every minute
+
+          [Timer]
+          OnBootSec=2min
+          OnUnitActiveSec=60s
+          Persistent=true
+          Unit=aicc-publications.service
+
+          [Install]
+          WantedBy=timers.target
+          UNIT
+
+          sudo systemctl daemon-reload
+
+          # The environment file holds the Browser Use token, so a readable
+          # permission is a leak. Refuse to start rather than run with it exposed.
+          PERM="$(sudo stat -c '%a' /etc/aicc-publications.env)"
+          if [ "$PERM" != "600" ]; then
+            echo "::error::/etc/aicc-publications.env is mode $PERM, expected 600."
+            exit 1
+          fi
+          if [ -z "$(sudo sed -n 's/^BROWSER_USE_API_KEY=//p' /etc/aicc-publications.env)" ]; then
+            echo "::warning::BROWSER_USE_API_KEY is empty in /etc/aicc-publications.env."
+          fi
+
+          sudo systemctl enable --now aicc-publications.timer
+          # One run now, so a broken unit is caught by the deploy instead of
+          # being discovered later by whoever queued the first job.
+          if ! sudo systemctl start aicc-publications.service; then
+            sudo journalctl -u aicc-publications.service -n 80 --no-pager
+            exit 1
+          fi
+
           sudo systemctl reload nginx
           REMOTE_SCRIPT
 
-          rm -f mobile-publisher.env dist.tar.gz worker.tar.gz mobile-publisher.tar.gz
+          rm -f mobile-publisher.env publications.env dist.tar.gz worker.tar.gz mobile-publisher.tar.gz publications-publisher.tar.gz
 
 # Automatic deployment enabled

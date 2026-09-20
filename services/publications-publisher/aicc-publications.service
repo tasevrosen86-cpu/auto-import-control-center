@@ -5,10 +5,13 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+User=ubuntu
 WorkingDirectory=/home/ubuntu/auto-import-control-center/services/publications-publisher
 # Credentials live here, mode 600, owned by root. The Browser Use gateway token
 # must never reach the frontend bundle.
 EnvironmentFile=/etc/aicc-publications.env
+# The interpreter path is substituted by the deploy, because systemd needs an
+# absolute path and node is not guaranteed to sit at /usr/bin.
 ExecStart=/usr/bin/node src/index.mjs drain
 # A single run may spend minutes inside the form, so a stuck run must not pile up.
 TimeoutStartSec=900
