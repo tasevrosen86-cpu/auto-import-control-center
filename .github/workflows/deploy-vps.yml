@@ -322,6 +322,12 @@ jobs:
 
           sudo systemctl daemon-reload
           sudo systemctl enable --now aicc-publications-display.service aicc-publications-browser.service aicc-publications-vnc.service aicc-publications-vnc-web.service
+          # Safe transport check only: opens the Mobile.bg form and records
+          # whether the self-hosted browser is blocked. It never fills or submits.
+          sudo -u ubuntu env DISPLAY=:99 $(sudo sed -n 's/^SUPABASE_URL=//p' /etc/aicc-publications.env | sed 's/^/SUPABASE_URL=/') \
+            $(sudo sed -n 's/^SUPABASE_SERVICE_ROLE_KEY=//p' /etc/aicc-publications.env | sed 's/^/SUPABASE_SERVICE_ROLE_KEY=/') \
+            PUBLICATIONS_CDP_URL=http://127.0.0.1:9222 \
+            $NODE_BIN "$PUBLICATIONS_DIR/src/index.mjs" browser-test || true
 
           # The environment file holds the Browser Use token, so a readable
           # permission is a leak. Refuse to start rather than run with it exposed.
