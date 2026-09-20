@@ -104,6 +104,19 @@ jobs:
           mkdir -p "$APP_DIR/services/source-intake-worker"
           tar -xzf /tmp/worker.tar.gz -C "$APP_DIR/services/source-intake-worker"
 
+          # The URL extractor is a one-shot systemd service. Uploading its source
+          # without starting it leaves the site using no worker until the next
+          # unknown external trigger. Start it explicitly after every deployment.
+          if sudo systemctl cat source-intake-worker.service >/dev/null 2>&1; then
+            if ! sudo systemctl start source-intake-worker.service; then
+              sudo journalctl -u source-intake-worker.service -n 100 --no-pager
+              exit 1
+            fi
+          else
+            echo "::error::source-intake-worker.service is missing; URL imports cannot run."
+            exit 1
+          fi
+
           mkdir -p "$PUBLISHER_DIR"
           tar -xzf /tmp/mobile-publisher.tar.gz -C "$PUBLISHER_DIR"
           cd "$PUBLISHER_DIR"
