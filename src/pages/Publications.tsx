@@ -41,7 +41,13 @@ export function Publications() {
     setBusy(true); setError(''); setNotice('');
     const { data, error: invokeError } = await supabase.functions.invoke('queue-publication-url', { body: { source_url: url.trim() } });
     setBusy(false);
-    if (invokeError || data?.error) { setError(data?.error || invokeError?.message || 'Неуспешно добавяне към опашката.'); return; }
+    if (invokeError || data?.error) {
+      let detail = data?.error as string | undefined;
+      if (!detail && invokeError && 'context' in invokeError) {
+        try { detail = (await (invokeError as { context: Response }).context.json()).error; } catch { /* generic transport error */ }
+      }
+      setError(detail || invokeError?.message || 'Неуспешно добавяне към опашката.'); return;
+    }
     setNotice(data?.was_created ? 'Линкът е добавен. Извличането на полета и снимки започна.' : 'Този линк вече е в собствената опашка на „Публикации“.');
     setUrl(''); void load();
   }
@@ -52,7 +58,13 @@ export function Publications() {
     const priceEur = Number(price.replace(',', '.'));
     const { data, error: invokeError } = await supabase.functions.invoke('prepare-publication-draft', { body: { draft_id: draft.id, price_eur: priceEur } });
     setBusy(false);
-    if (invokeError || data?.error) { setError(data?.error || invokeError?.message || 'Подготовката не успя.'); return; }
+    if (invokeError || data?.error) {
+      let detail = data?.error as string | undefined;
+      if (!detail && invokeError && 'context' in invokeError) {
+        try { detail = (await (invokeError as { context: Response }).context.json()).error; } catch { /* generic transport error */ }
+      }
+      setError(detail || invokeError?.message || 'Подготовката не успя.'); return;
+    }
     setNotice('Черновата е готова: полетата, снимките и ръчната EUR цена са запазени само в „Публикации“.'); void load();
   }
 
