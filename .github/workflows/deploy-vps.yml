@@ -69,6 +69,8 @@ jobs:
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
           BROWSER_PROFILE_ID: ${{ secrets.BROWSER_PROFILE_ID }}
           BROWSER_USE_PROFILE: ${{ secrets.BROWSER_USE_PROFILE }}
+          MOBILE_BG_USERNAME: ${{ secrets.MOBILE_BG_USERNAME }}
+          MOBILE_BG_PASSWORD: ${{ secrets.MOBILE_BG_PASSWORD }}
           PUBLICATIONS_CONTACT_PHONE: ${{ secrets.PUBLICATIONS_CONTACT_PHONE }}
           PUBLICATIONS_DESCRIPTION: ${{ secrets.PUBLICATIONS_DESCRIPTION }}
           PUBLICATIONS_CDP_URL: ${{ secrets.PUBLICATIONS_CDP_URL }}
@@ -82,6 +84,8 @@ jobs:
             printf 'BROWSER_USE_API_KEY=%s\n' "$BROWSER_USE_API_KEY"
             printf 'BROWSER_PROFILE_ID=%s\n' "$BROWSER_PROFILE_ID"
             printf 'BROWSER_USE_PROFILE=%s\n' "${BROWSER_USE_PROFILE:-mobilebg-publisher}"
+            printf 'PUBLICATIONS_MOBILE_BG_USERNAME=%s\n' "$MOBILE_BG_USERNAME"
+            printf 'PUBLICATIONS_MOBILE_BG_PASSWORD=%s\n' "$MOBILE_BG_PASSWORD"
             printf 'SUPABASE_URL=%s\n' 'https://cgftjqwebvddtsbcbeml.supabase.co'
             printf 'SUPABASE_ANON_KEY=%s\n' 'sb_publishable_3szh1-AiAAUYDeVBwO7bJQ_gXhkBU0A'
             printf 'PUBLICATIONS_CONTACT_PHONE=%s\n' "${PUBLICATIONS_CONTACT_PHONE:-0887353653}"
