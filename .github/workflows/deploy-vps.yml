@@ -149,8 +149,8 @@ jobs:
             fi
           done
           if [ -n "$SOURCE_KEY" ]; then
-            printf 'SUPABASE_SERVICE_ROLE_KEY=%s\n' "$SOURCE_KEY" | sudo tee -a /etc/aicc-mobile-publisher.env >/dev/null
-            echo "Publisher will use the service role key from $UNIT_NAME."
+            printf 'SUPABASE_SERVICE_ROLE_KEY=%s\n' "$SOURCE_KEY" | sudo tee -a /etc/aicc-publications.env >/dev/null
+            echo "Publications worker will use the service role key from $UNIT_NAME."
           else
             echo "::warning::No SUPABASE_SERVICE_ROLE_KEY found on the server. The publisher will run with the public key and cannot read the queue."
           fi
@@ -244,13 +244,10 @@ jobs:
             echo "::warning::BROWSER_USE_API_KEY is empty in /etc/aicc-publications.env."
           fi
 
-          sudo systemctl enable --now aicc-publications.timer
-          # One run now, so a broken unit is caught by the deploy instead of
-          # being discovered later by whoever queued the first job.
-          if ! sudo systemctl start aicc-publications.service; then
-            sudo journalctl -u aicc-publications.service -n 80 --no-pager
-            exit 1
-          fi
+          # The queue and Browser Use gate must pass first. Until then the
+          # publisher is installed but stopped, so no failing run repeats every minute.
+          sudo systemctl disable --now aicc-publications.timer || true
+          echo "Publications timer is installed but intentionally stopped until queue verification."
 
           sudo systemctl reload nginx
           REMOTE_SCRIPT
