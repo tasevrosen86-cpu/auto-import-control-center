@@ -58,7 +58,7 @@ const COUNTRY_CANDIDATES: Array<[string, string[]]> = [
 // Everything else — colour, modification, extras, the Canada-only additions and
 // the VIN — stays optional and is reported without blocking.
 const STRICT_FIELDS = (process.env.MOBILE_BG_STRICT_FIELDS
-  || 'title,make,model,body_type,price,currency,condition,fuel,gearbox,year,mileage,location,country,phone')
+  || 'title,make,model,body_type,price,currency,condition,fuel,gearbox,year,mileage,location,country,phone,final_description')
   .split(',').map(key => key.trim()).filter(Boolean);
 const VALUE_ALIASES: Record<string, Record<string, string>> = {
   fuel: { Бензин: 'Бензинов', Дизел: 'Дизелов', Хибрид: 'Хибриден', 'Газ (LPG)': 'Газ' },
@@ -416,8 +416,14 @@ async function populateStepOne(page: Page, fields: DraftField[], extras: DraftEx
     }
     if (matched) filled.push(`extra:${label}`); else skipped.push({ key: `extra:${label}`, value: label, reason: 'Няма точно съвпадение по видим label.' });
   }
+  // «Допълнителна информация» (f21) is blue on the form and blocks step 2 when
+  // it is empty. An empty draft used to leave no trace at all — no filled entry
+  // and no skipped one — so the run reported success over a form that Mobile.bg
+  // would not advance. A gap is now recorded like any other required field.
   const description = values.get('final_description') || values.get('description') || '';
-  if (description) {
+  if (!description) {
+    skipped.push({ key: 'final_description', value: '', reason: 'Няма стойност в черновата.' });
+  } else {
     const textarea = page.locator('textarea[name="f21"]').first();
     if (await textarea.count()) { await textarea.fill(description); filled.push('final_description'); }
     else skipped.push({ key: 'final_description', value: description, reason: 'Полето за описание липсва.' });

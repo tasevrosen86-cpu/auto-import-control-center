@@ -1,4 +1,8 @@
 import type { MobileBgDraftField, MobileBgDraftExtra } from '@/types';
+// Relative, not '@/lib/...': this module is also bundled by the Android asset
+// build, which runs esbuild directly and has no alias configuration. A '@/'
+// path would resolve in Vite and fail on the phone's build.
+import { ROYAL_CARS_PUBLISH_DEFAULTS, composeRoyalCarsDescription } from './company_profile';
 
 export const MONTHS_BG = ['Януари', 'Февруари', 'Март', 'Април', 'Май', 'Юни', 'Юли', 'Август', 'Септември', 'Октомври', 'Ноември', 'Декември'];
 
@@ -163,7 +167,11 @@ export function buildMobileBgPlan(fields: MobileBgDraftField[], extras: MobileBg
     steps.push({
       selector,
       value,
-      kind: ['price', 'power', 'displacement', 'mileage', 'vin'].includes(key) ? 'input' : 'select',
+      // «Модификация» (f7) is a free-text input on the live form, not a list,
+      // even though it sits among the selects. Treating it as one made the fill
+      // read the options of a text box, find none and report the field as
+      // unfillable.
+      kind: ['price', 'power', 'displacement', 'mileage', 'vin', 'modification'].includes(key) ? 'input' : 'select',
       label: key,
       // «country» is derived rather than translated, and every alias is a real
       // change of wording, so this is what the operator needs to see.
@@ -173,14 +181,21 @@ export function buildMobileBgPlan(fields: MobileBgDraftField[], extras: MobileBg
 
   const title = values.get('title') || '';
   if (title) steps.push({ selector: 'title', value: title, kind: 'input', label: 'title', translated: false });
-  const description = values.get('final_description') || values.get('description') || '';
-  if (description) steps.push({ selector: MOBILE_BG_TEXT_SELECTORS.description, value: description, kind: 'textarea', label: 'description', translated: false });
-  // f22 is the contact phone and Mobile.bg will not accept step 1 without it. It
-  // lives in MOBILE_BG_TEXT_SELECTORS, which the loop above never iterates, so it
-  // has to be pushed here: leaving it out silently produced a form that reported
-  // success and still failed validation.
-  const phone = values.get('phone') || '';
-  if (phone) steps.push({ selector: MOBILE_BG_TEXT_SELECTORS.phone, value: phone, kind: 'input', label: 'phone', translated: false });
+  // «Допълнителна информация» (f21) and «Мобилен телефон» (f22) are both blue —
+  // Mobile.bg will not advance to step 2 without them. Neither is guaranteed to
+  // be present in the draft: a draft created from the catalogue carries the
+  // company description, but one whose description was cleared, or that was
+  // never seeded with the company phone, arrives empty. They fell through the
+  // whole plan in that case, which is why the form kept insisting the blue
+  // fields were required even though the fill reported success. Both now fall
+  // back to the same company profile the «Обяви» flow publishes with, so f21 and
+  // f22 are always in the plan.
+  const description = values.get('final_description') || values.get('description')
+    || composeRoyalCarsDescription();
+  steps.push({ selector: MOBILE_BG_TEXT_SELECTORS.description, value: description, kind: 'textarea', label: 'description', translated: false });
+
+  const phone = values.get('phone') || ROYAL_CARS_PUBLISH_DEFAULTS.phone;
+  steps.push({ selector: MOBILE_BG_TEXT_SELECTORS.phone, value: phone, kind: 'input', label: 'phone', translated: false });
 
   const derived: string[] = [
     values.get('drivetrain') === '4x4' ? '4x4' : '',

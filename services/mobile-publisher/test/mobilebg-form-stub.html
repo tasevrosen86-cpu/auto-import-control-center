@@ -17,6 +17,11 @@
        form: the earlier code read it immediately and found nothing. -->
   <label>Модел <select name="f6"><option value="">-</option></select></label>
 
+  <!-- «Модификация» is a free-text input on the live form, not a select. It is
+       reproduced as a text box so a mapping that treats it as a list is caught:
+       reading the options of a text box reports the field as unfillable. -->
+  <label>Модификация <input name="f7"></label>
+
   <label>Гориво <select name="f8"><option value="">-</option><option>Бензинов</option><option>Дизелов</option><option>Хибриден</option></select></label>
   <label>Състояние <select name="f25"><option value="">-</option><option>Употребяван</option><option>Нов</option></select></label>
   <label>Мощност <input name="f9"></label>
