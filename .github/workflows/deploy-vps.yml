@@ -281,6 +281,8 @@ jobs:
           User=ubuntu
           ExecStart=/usr/bin/Xvfb :99 -screen 0 1440x1000x24 -nolisten tcp
           Restart=always
+          [Install]
+          WantedBy=multi-user.target
           UNIT
           sudo tee /etc/systemd/system/aicc-publications-browser.service >/dev/null <<UNIT
           [Unit]
@@ -296,6 +298,8 @@ jobs:
           ExecStart=$NODE_BIN src/local-browser.mjs
           Restart=always
           RestartSec=3
+          [Install]
+          WantedBy=multi-user.target
           UNIT
           sudo tee /etc/systemd/system/aicc-publications-vnc.service >/dev/null <<UNIT
           [Unit]
@@ -307,6 +311,8 @@ jobs:
           User=ubuntu
           ExecStart=/usr/bin/x11vnc -display :99 -localhost -forever -shared -nopw
           Restart=always
+          [Install]
+          WantedBy=multi-user.target
           UNIT
           sudo tee /etc/systemd/system/aicc-publications-vnc-web.service >/dev/null <<UNIT
           [Unit]
@@ -318,16 +324,29 @@ jobs:
           User=ubuntu
           ExecStart=/usr/bin/websockify --web=/usr/share/novnc 127.0.0.1:6080 127.0.0.1:5900
           Restart=always
+          [Install]
+          WantedBy=multi-user.target
           UNIT
 
           sudo systemctl daemon-reload
           sudo systemctl enable --now aicc-publications-display.service aicc-publications-browser.service aicc-publications-vnc.service aicc-publications-vnc-web.service
-          # Safe transport check only: opens the Mobile.bg form and records
-          # whether the self-hosted browser is blocked. It never fills or submits.
-          sudo -u ubuntu env DISPLAY=:99 $(sudo sed -n 's/^SUPABASE_URL=//p' /etc/aicc-publications.env | sed 's/^/SUPABASE_URL=/') \
-            $(sudo sed -n 's/^SUPABASE_SERVICE_ROLE_KEY=//p' /etc/aicc-publications.env | sed 's/^/SUPABASE_SERVICE_ROLE_KEY=/') \
-            PUBLICATIONS_CDP_URL=http://127.0.0.1:9222 \
-            $NODE_BIN "$PUBLICATIONS_DIR/src/index.mjs" browser-test || true
+          sudo systemctl start aicc-publications-browser-test.service || sudo journalctl -u aicc-publications-browser-test.service -n 80 --no-pager
+          # Safe transport check only. It receives the same EnvironmentFile as
+          # the production worker, so it cannot accidentally run with an empty
+          # Supabase configuration. It never fills or submits a listing.
+          sudo tee /etc/systemd/system/aicc-publications-browser-test.service >/dev/null <<UNIT
+          [Unit]
+          Description=AICC Publications self-hosted browser probe
+          Requires=aicc-publications-browser.service
+          After=aicc-publications-browser.service
+          [Service]
+          Type=oneshot
+          User=ubuntu
+          WorkingDirectory=$PUBLICATIONS_DIR
+          EnvironmentFile=/etc/aicc-publications.env
+          ExecStart=$NODE_BIN src/index.mjs browser-test
+          TimeoutStartSec=120
+          UNIT
 
           # The environment file holds the Browser Use token, so a readable
           # permission is a leak. Refuse to start rather than run with it exposed.
