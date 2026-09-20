@@ -444,7 +444,7 @@ jobs:
           marker = 'include /etc/nginx/snippets/aicc-publications-browser.conf;'
           if marker not in text:
               selected = None
-              for match in re.finditer(r'\\bserver\\s*\\{', text):
+              for match in re.finditer(r'\bserver\s*\{', text):
                   depth = 0
                   end = None
                   for index in range(match.end() - 1, len(text)):
@@ -456,7 +456,7 @@ jobs:
                               end = index
                               break
                   block = text[match.start():end] if end is not None else ''
-                  if end is not None and (re.search(r'server_name\\s+[^;]*autoimportcontrolcenter\\.biz', block, re.I) or re.search(r'root\\s+\\/var\\/www\\/html', block, re.I)):
+                  if end is not None and (re.search(r'server_name\s+[^;]*autoimportcontrolcenter\.biz', block, re.I) or re.search(r'root\s+/var/www/html', block, re.I)):
                       selected = end
                       break
               if selected is None:
