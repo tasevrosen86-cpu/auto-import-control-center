@@ -472,7 +472,7 @@ jobs:
                       break
               if selected is None:
                   raise SystemExit('AICC server block serving the web site was not found in ' + path)
-              text = text[:selected] + '\\n    ' + marker + '\\n' + text[selected:]
+              text = text[:selected] + '\n    ' + marker + '\n' + text[selected:]
               open(path, 'w', encoding='utf-8').write(text)
           PY
           if ! sudo nginx -t; then
