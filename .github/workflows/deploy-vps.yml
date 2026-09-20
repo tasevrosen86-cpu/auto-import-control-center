@@ -104,18 +104,27 @@ jobs:
           mkdir -p "$APP_DIR/services/source-intake-worker"
           tar -xzf /tmp/worker.tar.gz -C "$APP_DIR/services/source-intake-worker"
 
-          # The URL extractor is a one-shot systemd service. Uploading its source
-          # without starting it leaves the site using no worker until the next
-          # unknown external trigger. Start it explicitly after every deployment.
-          if sudo systemctl cat source-intake-worker.service >/dev/null 2>&1; then
-            if ! sudo systemctl start source-intake-worker.service; then
-              sudo journalctl -u source-intake-worker.service -n 100 --no-pager
-              exit 1
+          # Find the already-installed URL worker by its code directory, rather
+          # than assuming a unit name. This avoids starting either publisher.
+          SOURCE_INTAKE_UNIT=""
+          for UNIT_NAME in $(systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '$1 ~ /(source|intake|worker|import)/ {print $1}'); do
+            UNIT_INFO="$(sudo systemctl show "$UNIT_NAME" --property=ExecStart --property=WorkingDirectory --value 2>/dev/null || true)"
+            if printf '%s' "$UNIT_INFO" | grep -q "$APP_DIR/services/source-intake-worker"; then
+              SOURCE_INTAKE_UNIT="$UNIT_NAME"
+              break
             fi
-          else
-            echo "::error::source-intake-worker.service is missing; URL imports cannot run."
+          done
+          if [ -z "$SOURCE_INTAKE_UNIT" ]; then
+            echo "::error::URL intake worker unit was not found by its working directory."
+            echo "Candidate units:"
+            systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '$1 ~ /(source|intake|worker|import)/ {print $1}' || true
             exit 1
           fi
+          if ! sudo systemctl start "$SOURCE_INTAKE_UNIT"; then
+            sudo journalctl -u "$SOURCE_INTAKE_UNIT" -n 100 --no-pager
+            exit 1
+          fi
+          echo "Started URL intake worker: $SOURCE_INTAKE_UNIT"
 
           mkdir -p "$PUBLISHER_DIR"
           tar -xzf /tmp/mobile-publisher.tar.gz -C "$PUBLISHER_DIR"
@@ -169,7 +178,7 @@ jobs:
           fi
 
           NPM_BIN="$(command -v npm)"
-          SOURCE_ENV_FILE="$(systemctl show source-intake-worker.service --property=EnvironmentFiles --value 2>/dev/null | tr ' ' '\n' | sed 's/^-//' | awk 'NF {print; exit}')"
+          SOURCE_ENV_FILE="$(systemctl show "$SOURCE_INTAKE_UNIT" --property=EnvironmentFiles --value 2>/dev/null | tr ' ' '\n' | sed 's/^-//' | awk 'NF {print; exit}')"
           SOURCE_ENV_LINE=""
           if [ -n "$SOURCE_ENV_FILE" ] && [ -f "$SOURCE_ENV_FILE" ]; then
             SOURCE_ENV_LINE="EnvironmentFile=$SOURCE_ENV_FILE"
