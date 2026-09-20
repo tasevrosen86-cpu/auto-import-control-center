@@ -6,7 +6,11 @@ import { openSession, describeTransport } from './session.mjs';
 import { inspectForm, publishOne, openForm, ensureLoggedIn } from './form.mjs';
 import { preflight } from './preflight.mjs';
 
-const db=createClient(process.env.SUPABASE_URL||'',process.env.SUPABASE_SERVICE_ROLE_KEY||'',{auth:{persistSession:false}});
+// Browser diagnostics must not need database credentials. The database client is
+// intentionally created only when the private queue worker can authenticate.
+const supabaseUrl=process.env.SUPABASE_URL||'';
+const serviceRoleKey=process.env.SUPABASE_SERVICE_ROLE_KEY||'';
+const db=serviceRoleKey?createClient(supabaseUrl,serviceRoleKey,{auth:{persistSession:false}}):null;
 const worker=process.env.PUBLICATIONS_WORKER_NAME||'aicc-publications-publisher';
 const now=()=>new Date().toISOString();
 
@@ -52,7 +56,7 @@ async function processJob(job){
  }catch(error){return finish(job,'FAILED',{},String(error));}finally{await session?.close().catch(()=>undefined);}
 }
 export async function drain(){
- if(!process.env.SUPABASE_SERVICE_ROLE_KEY)throw new Error('Липсва SUPABASE_SERVICE_ROLE_KEY: publisher-ът няма право да чете собствената опашка.');
+ if(!db)throw new Error('Липсва SUPABASE_SERVICE_ROLE_KEY: publisher-ът няма право да чете собствената опашка.');
  const {data,error}=await db.rpc('claim_publication_publish_job',{worker_name:worker});if(error)throw error;
  const job=Array.isArray(data)?data[0]:data;if(!job)return {processed:0};await processJob(job);return {processed:1,job_id:job.id};
 }
