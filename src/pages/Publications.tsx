@@ -79,10 +79,21 @@ export function Publications(){
     const {data,error:invokeError}=await supabase.functions.invoke('publication-browser-access',{body:{},headers:{Authorization:`Bearer ${sessionData.session.access_token}`}});
     setBusy(false);
     if(invokeError||data?.error){let detail=data?.error as string|undefined;if(!detail&&invokeError&&'context'in invokeError){try{detail=(await(invokeError as {context:Response}).context.json()).error;}catch{}}setError(detail||invokeError?.message||'Неуспешно отваряне на браузъра.');return;}
-    const target=typeof data?.browser_url==='string'?data.browser_url:'';
-    if(!target){setError('Браузърният адрес не бе върнат.');return;}
-    setNotice('Отваря се защитен прозорец за еднократен вход в Mobile.bg.');
-    window.location.assign(target);
+    const ticketUrl=typeof data?.browser_url==='string'?data.browser_url:'';
+    if(!ticketUrl){setError('Защитеният достъп до браузъра не бе върнат.');return;}
+    // The signed Edge Function issues only a short-lived access ticket. The VPS
+    // exchanges it for a Browser Use live URL; the API key never reaches this page.
+    const accessUrl=ticketUrl.replace('/publications-browser/vnc.html','/publications-browser/open');
+    try{
+      const response=await fetch(accessUrl,{method:'POST',credentials:'same-origin',cache:'no-store'});
+      const payload=await response.json().catch(()=>null);
+      const liveUrl=typeof payload?.live_url==='string'?payload.live_url:'';
+      if(!response.ok||!liveUrl){setError(payload?.error||'Browser Use не отвори браузърната сесия.');return;}
+      setNotice('Browser Use е отворен в нов раздел. Влезте ръчно в Mobile.bg; паролата не минава през сайта.');
+      window.open(liveUrl,'_blank','noopener,noreferrer');
+    }catch{
+      setError('Неуспешна връзка със защитения Browser Use достъп.');
+    }
   }
 
   async function queuePublish(){
