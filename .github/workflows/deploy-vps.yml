@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# Deployments share one VPS and temporary archive names. They must never run in
+# parallel, otherwise one run can remove another run's archive mid-upload.
+concurrency:
+  group: aicc-vps-production-deploy
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
