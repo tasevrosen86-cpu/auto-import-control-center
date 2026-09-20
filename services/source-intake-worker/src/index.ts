@@ -10,7 +10,7 @@ for (const name of ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY']) {
 
 const db = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false } });
 const ingestUrl = process.env.SOURCE_INGEST_URL || `${process.env.SUPABASE_URL}/functions/v1/ingest-source-listing`;
-const publicationIngestUrl = process.env.PUBLICATION_INGEST_URL || `${process.env.SUPABASE_URL}/functions/v1/ingest-publication-url`;
+const publicationIngestUrl = process.env.PUBLICATION_INGEST_URL || `${process.env.SUPABASE_URL}/functions/v1/ingest-publication-listing`;
 const workerName = process.env.WORKER_NAME || `source-intake-${process.pid}`;
 const companyDescription = `RoyalCarsBG професионален внос на проверени автомобили от САЩ и Канада
 
@@ -447,11 +447,11 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string,
   };
 }
 async function updateJob(job: SourceJob, values: Record<string, unknown>) {
-  const table = job.flow === 'publications' ? 'publication_import_jobs' : 'source_listing_jobs';
+  const table = job.flow === 'publications' ? 'publication_source_jobs' : 'source_listing_jobs';
   const { error } = await db.from(table).update({ ...values, updated_at: new Date().toISOString() }).eq('id', job.id);
   if (error) throw error;
 }
-async function claimFrom(table: 'source_listing_jobs' | 'publication_import_jobs', flow: 'ads' | 'publications'): Promise<SourceJob | null> {
+async function claimFrom(table: 'source_listing_jobs' | 'publication_source_jobs', flow: 'ads' | 'publications'): Promise<SourceJob | null> {
   const columns = table === 'source_listing_jobs'
     ? 'id,draft_id,source_type,source_url,attempt_count'
     : 'id,source_type,source_url,attempt_count';
@@ -466,7 +466,7 @@ async function claimFrom(table: 'source_listing_jobs' | 'publication_import_jobs
 async function claim(): Promise<SourceJob | null> {
   // Publications are deliberately a separate queue; sharing only the parser
   // avoids reimplementing tested AutoTrader/Encar extraction logic.
-  return await claimFrom('publication_import_jobs', 'publications') || await claimFrom('source_listing_jobs', 'ads');
+  return await claimFrom('publication_source_jobs', 'publications') || await claimFrom('source_listing_jobs', 'ads');
 }
 async function run() {
   const job = await claim();
@@ -488,7 +488,7 @@ async function run() {
         'content-type': 'application/json',
         authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
       },
-      body: JSON.stringify(job.flow === 'publications' ? { ...payload, job_id: job.id } : payload),
+      body: JSON.stringify(payload),
     });
     if (!response.ok) throw new Error(`Ingest върна ${response.status}: ${await response.text()}`);
     console.log(await response.text());
