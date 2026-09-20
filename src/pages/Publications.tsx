@@ -6,14 +6,16 @@ import { formatDateTime } from '@/lib/format';
 type Job = { id:string; draft_id:string; source_url:string; status:'QUEUED'|'RUNNING'|'COMPLETED'|'FAILED'; error_message:string|null; created_at:string };
 type Field = { draft_id:string; field_key:string; value:string|null; source:string|null };
 type DraftRow = { id:string; title:string|null; source_url:string|null; price_eur:number|null; status:string; extraction_status:string; extraction_error:string|null; created_at:string };
-type Draft = DraftRow & { fields:Field[]; images:Array<{id:string;is_selected:boolean}> };\ntype PublishJob={id:string;draft_id:string;status:string;error_message:string|null;public_url:string|null;created_at:string};
+type Draft = DraftRow & { fields:Field[]; images:Array<{id:string;is_selected:boolean}> };
+type PublishJob={id:string;draft_id:string;status:string;error_message:string|null;public_url:string|null;created_at:string};
 const labels:Record<string,string>={category:'Категория',make:'Марка',model:'Модел',title:'Заглавие',modification:'Модификация',year:'Година',month:'Месец',mileage:'Пробег',fuel:'Гориво',gearbox:'Скоростна кутия',power:'Мощност',displacement:'Кубатура',color:'Цвят',condition:'Състояние',drivetrain:'Задвижване',vin:'VIN',location:'Местоположение',seller_name:'Продавач',phone:'Телефон',final_description:'Описание'};
 const required=['make','model','year','mileage','fuel','gearbox'];
 
 export function Publications(){
   const [url,setUrl]=useState('');
   const [jobs,setJobs]=useState<Job[]>([]);
-  const [drafts,setDrafts]=useState<Draft[]>([]);\n  const [publishJobs,setPublishJobs]=useState<PublishJob[]>([]);
+  const [drafts,setDrafts]=useState<Draft[]>([]);
+  const [publishJobs,setPublishJobs]=useState<PublishJob[]>([]);
   const [selectedId,setSelectedId]=useState('');
   const [price,setPrice]=useState('');
   const [busy,setBusy]=useState(false);
@@ -25,7 +27,8 @@ export function Publications(){
       supabase.from('publication_source_jobs').select('id,draft_id,source_url,status,error_message,created_at').order('created_at',{ascending:false}).limit(25),
       supabase.from('publication_drafts').select('id,title,source_url,price_eur,status,extraction_status,extraction_error,created_at').order('created_at',{ascending:false}).limit(25),
       supabase.from('publication_draft_fields').select('draft_id,field_key,value,source'),
-      supabase.from('publication_draft_images').select('id,draft_id,is_selected'),\n      supabase.from('publication_publish_jobs').select('id,draft_id,status,error_message,public_url,created_at').order('created_at',{ascending:false}).limit(25),
+      supabase.from('publication_draft_images').select('id,draft_id,is_selected'),
+      supabase.from('publication_publish_jobs').select('id,draft_id,status,error_message,public_url,created_at').order('created_at',{ascending:false}).limit(25),
     ]);
     const failed=[jobsResult.error,draftsResult.error,fieldsResult.error,imagesResult.error,publishResult.error].find(Boolean);
     if(failed){setError('Неуспешно зареждане: '+failed!.message);return;}
@@ -35,7 +38,8 @@ export function Publications(){
     for(const image of (imagesResult.data||[]) as Array<{id:string;draft_id:string;is_selected:boolean}>) imagesByDraft.set(image.draft_id,[...(imagesByDraft.get(image.draft_id)||[]),{id:image.id,is_selected:image.is_selected}]);
     const next=((draftsResult.data||[]) as DraftRow[]).map(row=>({...row,fields:byDraft.get(row.id)||[],images:imagesByDraft.get(row.id)||[]}));
     setJobs((jobsResult.data||[]) as Job[]);
-    setDrafts(next);\n    setPublishJobs((publishResult.data||[]) as PublishJob[]);
+    setDrafts(next);
+    setPublishJobs((publishResult.data||[]) as PublishJob[]);
     setSelectedId(current=>current||next[0]?.id||'');
   },[]);
 
