@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { chromium, type Page } from 'playwright';
 
-type SourceJob = { id: string; draft_id: string; source_type: 'encar' | 'autotrader_ca' | 'other'; source_url: string; attempt_count: number };
+type SourceJob = { id: string; draft_id?: string; source_type: 'encar' | 'autotrader_ca' | 'other'; source_url: string; attempt_count: number; flow?: 'ads' | 'publications' };
 type JsonRecord = Record<string, unknown>;
 
 for (const name of ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY']) {
@@ -10,6 +10,7 @@ for (const name of ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY']) {
 
 const db = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false } });
 const ingestUrl = process.env.SOURCE_INGEST_URL || `${process.env.SUPABASE_URL}/functions/v1/ingest-source-listing`;
+const publicationIngestUrl = process.env.PUBLICATION_INGEST_URL || `${process.env.SUPABASE_URL}/functions/v1/ingest-publication-url`;
 const workerName = process.env.WORKER_NAME || `source-intake-${process.pid}`;
 const companyDescription = `RoyalCarsBG професионален внос на проверени автомобили от САЩ и Канада
 
@@ -446,17 +447,26 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string,
   };
 }
 async function updateJob(job: SourceJob, values: Record<string, unknown>) {
-  const { error } = await db.from('source_listing_jobs').update({ ...values, updated_at: new Date().toISOString() }).eq('id', job.id);
+  const table = job.flow === 'publications' ? 'publication_import_jobs' : 'source_listing_jobs';
+  const { error } = await db.from(table).update({ ...values, updated_at: new Date().toISOString() }).eq('id', job.id);
   if (error) throw error;
 }
-async function claim(): Promise<SourceJob | null> {
-  const { data, error } = await db.from('source_listing_jobs').select('id,draft_id,source_type,source_url,attempt_count').eq('status', 'QUEUED').order('created_at').limit(1).maybeSingle();
+async function claimFrom(table: 'source_listing_jobs' | 'publication_import_jobs', flow: 'ads' | 'publications'): Promise<SourceJob | null> {
+  const columns = table === 'source_listing_jobs'
+    ? 'id,draft_id,source_type,source_url,attempt_count'
+    : 'id,source_type,source_url,attempt_count';
+  const { data, error } = await db.from(table).select(columns).eq('status', 'QUEUED').order('created_at').limit(1).maybeSingle();
   if (error || !data) return null;
-  const { data: claimed, error: updateError } = await db.from('source_listing_jobs')
+  const { data: claimed, error: updateError } = await db.from(table)
     .update({ status: 'RUNNING', attempt_count: Number(data.attempt_count || 0) + 1, started_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-    .eq('id', data.id).eq('status', 'QUEUED').select('id,draft_id,source_type,source_url,attempt_count').maybeSingle();
+    .eq('id', data.id).eq('status', 'QUEUED').select(columns).maybeSingle();
   if (updateError) throw updateError;
-  return claimed as SourceJob | null;
+  return claimed ? { ...(claimed as Omit<SourceJob, 'flow'>), flow } : null;
+}
+async function claim(): Promise<SourceJob | null> {
+  // Publications are deliberately a separate queue; sharing only the parser
+  // avoids reimplementing tested AutoTrader/Encar extraction logic.
+  return await claimFrom('publication_import_jobs', 'publications') || await claimFrom('source_listing_jobs', 'ads');
 }
 async function run() {
   const job = await claim();
@@ -472,21 +482,23 @@ async function run() {
     const detail = valuesFromDetailText(detailText);
     const domImageUrls = await page.locator('img').evaluateAll(nodes => nodes.map(node => (node as HTMLImageElement).currentSrc || (node as HTMLImageElement).src).filter(Boolean));
     const payload = makePayload(job, documents, await page.title(), detail, domImageUrls);
-    const response = await fetch(ingestUrl, {
+    const response = await fetch(job.flow === 'publications' ? publicationIngestUrl : ingestUrl, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
         authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(job.flow === 'publications' ? { ...payload, job_id: job.id } : payload),
     });
     if (!response.ok) throw new Error(`Ingest върна ${response.status}: ${await response.text()}`);
     console.log(await response.text());
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : 'Непозната грешка.';
     await updateJob(job, { status: 'FAILED', error_message: message, finished_at: new Date().toISOString() });
-    await db.from('mobile_bg_drafts').update({ extraction_status: 'FAILED', extraction_error: message, status: 'ERROR', updated_at: new Date().toISOString() }).eq('id', job.draft_id);
-    await db.from('mobile_bg_draft_action_log').insert({ draft_id: job.draft_id, action: 'SOURCE_JSON_EXTRACTION_FAILED', actor: workerName, details: { message, source_url: job.source_url } });
+    if (job.flow !== 'publications' && job.draft_id) {
+      await db.from('mobile_bg_drafts').update({ extraction_status: 'FAILED', extraction_error: message, status: 'ERROR', updated_at: new Date().toISOString() }).eq('id', job.draft_id);
+      await db.from('mobile_bg_draft_action_log').insert({ draft_id: job.draft_id, action: 'SOURCE_JSON_EXTRACTION_FAILED', actor: workerName, details: { message, source_url: job.source_url } });
+    }
     throw cause;
   } finally {
     await browser.close();
