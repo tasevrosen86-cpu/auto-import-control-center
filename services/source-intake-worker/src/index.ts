@@ -372,7 +372,12 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string,
   const price = nested(vehicle, 'offers', ['price']) || firstValue(vehicle, ['price', 'salePrice']);
   const currency = nested(vehicle, 'offers', ['priceCurrency']) || firstValue(vehicle, ['priceCurrency', 'currency']);
   const euroStandard = normalizeEuro(detail.euro || firstValue(vehicle, ['euroStandard', 'euro_standard', 'emissionClass', 'emissions', 'euro']));
-  const color = normalizeColor(detail.color || firstValue(vehicle, ['color', 'vehicleColor', 'exteriorColor', 'bodyColor', 'colour']));
+  // Prefer AutoTrader's structured exterior colour. The visible-page fallback
+  // can continue into the next label ("and Upholstery"), which is never a colour.
+  const autoTraderColor = source === 'autotrader_ca'
+    ? (scalar(asRecord(autoDetail.bodyColor).formatted) || scalar(autoDetail.bodyColor))
+    : null;
+  const color = normalizeColor(autoTraderColor || detail.color || firstValue(vehicle, ['color', 'vehicleColor', 'exteriorColor', 'bodyColor', 'colour']));
   const description = companyDescription;
   const fields: Array<{ key: string; value: string; source: string; proof: string }> = [];
   const push = (key: string, value: string | null) => { if (value) fields.push({ key, value, source, proof: job.source_url }); };
