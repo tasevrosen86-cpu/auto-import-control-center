@@ -59,7 +59,9 @@ export default {
     if (url.pathname.endsWith("/validate")) {
       if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
       try {
-        return await validateTicket(url.searchParams.get("ticket") || "")
+        const original = request.headers.get("x-original-uri") || url.pathname;
+        const ticket = new URL(original, SITE_ORIGIN).searchParams.get("ticket") || "";
+        return await validateTicket(ticket)
           ? new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } })
           : new Response("Forbidden", { status: 403 });
       } catch {
