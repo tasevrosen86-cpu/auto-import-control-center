@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, CheckCircle2, ExternalLink, FileText, Image, Loader2, RefreshCw } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ExternalLink, FileText, Image, Loader2, MonitorUp, RefreshCw } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { formatDateTime } from '@/lib/format';
 
@@ -72,6 +72,19 @@ export function Publications(){
     if(invokeError||data?.error){let detail=data?.error as string|undefined;if(!detail&&invokeError&&'context'in invokeError){try{detail=(await(invokeError as {context:Response}).context.json()).error;}catch{}}setError(detail||invokeError?.message||'Подготовката не успя.');return;}
     setNotice('Готовата чернова е запазена в „Публикации“ с полета, снимки и ръчна EUR цена.');void load();
   }
+  async function openMobileBrowser(){
+    setBusy(true);setError('');setNotice('');
+    const {data:sessionData}=await supabase.auth.getSession();
+    if(!sessionData.session?.access_token){setBusy(false);setError('Сесията е изтекла. Влезте отново в сайта.');return;}
+    const {data,error:invokeError}=await supabase.functions.invoke('publication-browser-access',{body:{},headers:{Authorization:`Bearer ${sessionData.session.access_token}`}});
+    setBusy(false);
+    if(invokeError||data?.error){let detail=data?.error as string|undefined;if(!detail&&invokeError&&'context'in invokeError){try{detail=(await(invokeError as {context:Response}).context.json()).error;}catch{}}setError(detail||invokeError?.message||'Неуспешно отваряне на браузъра.');return;}
+    const target=typeof data?.browser_url==='string'?data.browser_url:'';
+    if(!target){setError('Браузърният адрес не бе върнат.');return;}
+    setNotice('Отваря се защитен прозорец за еднократен вход в Mobile.bg.');
+    window.location.assign(target);
+  }
+
   async function queuePublish(){
     if(!draft)return;
     setBusy(true);setError('');setNotice('');
@@ -86,7 +99,7 @@ export function Publications(){
   const status=(value:string)=>value==='COMPLETED'?'Готово':value==='RUNNING'?'Извличане':value==='FAILED'?'Грешка':value==='WAITING_SESSION'?'Нужен вход':value==='WAITING_CONFIRMATION'?'Чака потвърждение':'На опашка';
 
   return <div className="space-y-4">
-    <header className="flex items-end justify-between gap-3"><div><h1 className="text-lg font-extrabold text-slate-800">Публикации</h1><p className="mt-1 text-xs text-slate-500">Самостоятелен URL importer. Създава пълни чернови по същия механизъм като „Обяви“, но в отделна база.</p></div><button onClick={()=>void load()} className="flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600"><RefreshCw className="h-3.5 w-3.5"/>Опресни</button></header>
+    <header className="flex items-end justify-between gap-3"><div><h1 className="text-lg font-extrabold text-slate-800">Публикации</h1><p className="mt-1 text-xs text-slate-500">Самостоятелен URL importer. Създава пълни чернови по същия механизъм като „Обяви“, но в отделна база.</p></div><div className="flex shrink-0 gap-2"><button disabled={busy} onClick={()=>void openMobileBrowser()} className="flex items-center gap-1.5 rounded-md bg-slate-800 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"><MonitorUp className="h-3.5 w-3.5"/>Влез в Mobile.bg</button><button onClick={()=>void load()} className="flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600"><RefreshCw className="h-3.5 w-3.5"/>Опресни</button></div></header>
     {notice&&<div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">{notice}</div>}
     {error&&<div className="flex gap-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800"><AlertTriangle className="h-4 w-4 shrink-0"/>{error}</div>}
     <section className="rounded-lg border border-slate-200 bg-white"><header className="border-b border-slate-100 px-3 py-3"><h2 className="text-sm font-bold text-slate-700">1. Импортирай нов URL</h2><p className="mt-1 text-[11px] text-slate-500">Поставете директен линк към AutoTrader Canada или Encar. Създава се нова чернова само за „Публикации“.</p></header><div className="grid gap-2 p-3 sm:grid-cols-[1fr_auto]"><input value={url} onChange={e=>setUrl(e.target.value)} placeholder="https://www.autotrader.ca/offers/... или encar.com/..." className="h-10 rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-blue-400"/><button disabled={busy} onClick={()=>void importUrl()} className="flex h-10 items-center justify-center gap-1.5 rounded-md bg-blue-600 px-4 text-xs font-bold text-white disabled:opacity-50">{busy&&<Loader2 className="h-3.5 w-3.5 animate-spin"/>}Извлечи данни и снимки</button></div>
