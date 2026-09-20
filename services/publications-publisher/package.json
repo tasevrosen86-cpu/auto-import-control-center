@@ -6,7 +6,9 @@
   "description": "Publishing engine for the Publications section. Separate from the «Обяви» publisher on purpose.",
   "scripts": {
     "browser-test": "node src/index.mjs browser-test",
-    "drain": "node src/index.mjs drain"
+    "drain": "node src/index.mjs drain",
+    "test": "node test/form-steps.test.mjs",
+    "onboard": "node src/onboard.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4"
