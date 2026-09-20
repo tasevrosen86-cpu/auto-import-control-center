@@ -20,11 +20,9 @@ import {
 export const FORM_URL = process.env.PUBLICATIONS_FORM_URL || 'https://www.mobile.bg/pcgi/mobile.cgi?pubtype=1&act=6&subact=4&actions=1';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// The proven script hardcoded «януари». The report records that as the
-// historical value and keeps the current publishing rule as a separate
-// decision, so the default stays the proven one and a job may override it.
+// Publications uses the current business rule: Canadian imports default to December.\n// A draft may still provide an explicit month.
 const MONTHS_BY_NUMBER = ['януари', 'февруари', 'март', 'април', 'май', 'юни', 'юли', 'август', 'септември', 'октомври', 'ноември', 'декември'];
-const DEFAULT_MONTH = 'януари';
+const DEFAULT_MONTH = 'декември';
 
 function resolveMonth(item) {
   if (item.month_label) return item.month_label;
