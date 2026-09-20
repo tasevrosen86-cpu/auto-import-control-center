@@ -56,4 +56,4 @@ export async function drain(){
  const {data,error}=await db.rpc('claim_publication_publish_job',{worker_name:worker});if(error)throw error;
  const job=Array.isArray(data)?data[0]:data;if(!job)return {processed:0};await process(job);return {processed:1,job_id:job.id};
 }
-if(process.argv[1]&&import.meta.url===\`file://\${process.argv[1]}\`){const command=process.argv[2]||'drain';(command==='browser-test'?browserTest():drain()).then(x=>console.log(JSON.stringify(x))).catch(e=>{console.error(e.message||e);process.exit(1)});}
+if(process.argv[1]&&import.meta.url===('file://' + process.argv[1])){const command=process.argv[2]||'drain';(command==='browser-test'?browserTest():drain()).then(x=>console.log(JSON.stringify(x))).catch(e=>{console.error(e.message||e);process.exit(1)});}
