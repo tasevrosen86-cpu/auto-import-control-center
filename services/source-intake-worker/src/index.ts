@@ -386,6 +386,9 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string,
   pushTrace('title', vehicleTitle);
   pushTrace('modification', source === 'autotrader_ca' ? autotraderModification(documents) : withSource([]));
   push('year', year);
+  // Canada imports are recorded with the required Mobile.bg production month.
+  // This applies only to the independent Publications URL flow.
+  if (job.flow === 'publications' && source === 'autotrader_ca') push('month', 'Декември');
   push('mileage', mileage);
   push('fuel', fuel);
   push('gearbox', gearbox);
