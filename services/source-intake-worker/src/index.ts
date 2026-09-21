@@ -294,7 +294,28 @@ function normalizeColor(value: string | null): string | null {
   if (source.includes('yellow') || source.includes('gold')) return 'Златен';
   if (source.includes('red')) return 'Червен';
   if (source.includes('blue')) return 'Син';
-  return value;
+  // A miss must not pass the raw text through: the visible-page fallback runs on
+  // into the next label, so "and Upholstery" reached the colour control and the
+  // select could never match it. Unknown colours are reported as absent instead.
+  return null;
+}
+// Body styles are kept in the internal vocabulary the publisher's BODY_LABELS
+// table uses, so both the source text and Mobile.bg's own wording resolve to the
+// same keys. An unknown style is reported as absent rather than guessed: the
+// publisher has its own make-based fallback, and a wrong category silently
+// mislabels the listing.
+function normalizeBody(value: string | null): string | null {
+  if (!value) return null;
+  const source = value.toLowerCase();
+  if (source.includes('кабрио') || source.includes('convertible') || source.includes('cabriolet')) return 'convertible';
+  if (source.includes('пикап') || source.includes('pickup') || source.includes('pick-up') || source.includes('truck')) return 'pickup';
+  if (source.includes('хечбек') || source.includes('hatchback') || source.includes('hatch')) return 'hatchback';
+  if (source.includes('комби') || source.includes('wagon') || source.includes('estate') || source.includes('avant')) return 'wagon';
+  if (source.includes('купе') || source.includes('coupe')) return 'coupe';
+  if (source.includes('седан') || source.includes('sedan') || source.includes('saloon')) return 'sedan';
+  if (source.includes('ван') || source.includes('van') || source.includes('minivan')) return 'van';
+  if (source.includes('suv') || source.includes('джип') || source.includes('crossover') || source.includes('sport utility') || source.includes('utility vehicle')) return 'large_suv';
+  return null;
 }
 function imagesFrom(root: unknown): JsonRecord[] {
   const urls = new Set<string>();
@@ -454,6 +475,11 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string,
   push('displacement', displacement);
   push('euro_standard', euroStandard);
   push('color', color);
+  // The publications publisher requires a body style and maps it to Mobile.bg's
+  // «Категория» (f11), which reloads the area and country lists. The intake
+  // worker already reads AutoTrader's `bodyType` but never wrote it, so the
+  // publisher fell back to a fixed «Джип» for every car.
+  push('body', normalizeBody(scalar(asRecord(autoDetail.bodyType).formatted) || scalar(autoDetail.bodyType) || firstValue(vehicle, ['bodyType', 'vehicleConfiguration', 'bodyStyle', 'category'])));
   push('doors', firstValue(vehicle, ['numberOfDoors', 'doors']));
   push('seats', firstValue(vehicle, ['seatingCapacity', 'seats']));
   push('vin', firstValue(vehicle, ['vehicleIdentificationNumber', 'vin']));

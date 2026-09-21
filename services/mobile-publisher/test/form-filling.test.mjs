@@ -48,6 +48,7 @@ const readForm = () => page.evaluate(() => {
     make: value('f5'), model: value('f6'), fuel: value('f8'), condition: value('f25'),
     month: value('f14'), year: value('f15'), location: value('f18'), country: value('f19'),
     color: value('f17'), title: value('title'), description: value('f21'), vin: value('f32'),
+    body: value('f11'),
   };
 });
 
@@ -80,6 +81,7 @@ const canadaFields = [
   { field_key: 'month', value: 'Април' },
   { field_key: 'year', value: '2023' },
   { field_key: 'location', value: 'Извън страната → Канада' },
+  { field_key: 'body', value: 'large_suv' },
   { field_key: 'description', value: 'Тестово описание' },
 ];
 const withKorea = canadaFields.map((field) => {
@@ -94,10 +96,10 @@ await scenario('пълна канадска чернова', canadaFields, {
   title: 'Dodge RAM 1500 2023',
   make: 'Dodge', model: 'RAM 1500', month: 'април',
   condition: 'Употребяван', fuel: 'Дизелов',
-  location: 'Извън страната', country: 'Канада', description: 'Тестово описание',
+  body: 'Джип', location: 'Извън страната', country: 'Канада', description: 'Тестово описание',
 });
 
-await scenario('пълна корейска чернова', withKorea, { country: 'Южна Корея', model: 'Sorento' });
+await scenario('пълна корейска чернова', withKorea, { body: 'Джип', country: 'Южна Корея', model: 'Sorento' });
 
 // An optional value that does not exist must be reported, not fatal: colour and
 // VIN, the Canada-only extras and the modification stay free for the broker.

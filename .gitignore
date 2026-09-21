@@ -3,3 +3,7 @@ dist
 .env
 *.local
 *.tsbuildinfo
+
+# Local Android build output and packaged APK: large binaries, not source.
+Apk/
+artifacts/

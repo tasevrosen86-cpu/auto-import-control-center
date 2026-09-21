@@ -7,7 +7,7 @@
   "scripts": {
     "browser-test": "node src/index.mjs browser-test",
     "drain": "node src/index.mjs drain",
-    "test": "node test/form-steps.test.mjs",
+    "test": "node test/form-steps.test.mjs && node test/body-label.test.mjs",
     "onboard": "node src/onboard.mjs"
   },
   "dependencies": {
