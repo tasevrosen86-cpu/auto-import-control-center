@@ -31,13 +31,15 @@ async function signedOutNavigation(page) {
   const candidates = [];
   for (const frame of page.frames()) {
     const frameUrl = frame.url();
-    const links = await frame.locator('a').evaluateAll((anchors) => anchors
-      .map((anchor) => ({
-        text: (anchor.innerText || anchor.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80),
-        href: anchor.href || '',
+    const links = await frame.locator('a, button, [onclick], input[type="button"], input[type="submit"]').evaluateAll((elements) => elements
+      .map((element) => ({
+        tag: element.tagName.toLowerCase(),
+        text: (element.innerText || element.value || element.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80),
+        href: element.href || element.getAttribute('href') || '',
+        onclick: element.getAttribute('onclick') || '',
       }))
       .filter((item) => /вход|login|sign in/i.test(item.text))
-      .slice(0, 8)).catch(() => []);
+      .slice(0, 12)).catch(() => []);
     candidates.push(...links.map((item) => ({ ...item, frame: frameUrl })));
   }
   return candidates.slice(0, 12);
@@ -137,7 +139,12 @@ const server = http.createServer(async (request, response) => {
   }
   try {
     const opened = await openLiveBrowser();
-    json(response, 200, { live_url: opened.liveUrl, login: opened.login.state, expires_in_seconds: Math.floor(lifetimeMs / 1000) });
+    json(response, 200, {
+      live_url: opened.liveUrl,
+      login: opened.login.state,
+      login_diagnostics: opened.login.candidates || [],
+      expires_in_seconds: Math.floor(lifetimeMs / 1000),
+    });
   } catch (error) {
     console.error('Browser Use manual access failed:', error instanceof Error ? error.message : error);
     json(response, 502, { error: 'Неуспешно отваряне на Browser Use браузъра. Проверете Browser Use профила и наличния баланс.' });
