@@ -13,6 +13,7 @@ import { Statistics } from '@/pages/Statistics';
 import { Sales } from '@/pages/Sales';
 import { Publications } from '@/pages/Publications';
 import { Extension } from '@/pages/Extension';
+import { Calculators } from '@/pages/Calculators';
 import { supabase } from '@/lib/supabase';
 import type { DraftSeed } from '@/lib/draft_seed';
 import { createDraftFromCatalog } from '@/lib/draft_create';
@@ -58,6 +59,7 @@ function App() {
   else if (page === 'sales') content = <Sales />;
   else if (page === 'publications') content = <Publications />;
   else if (page === 'extension') content = <Extension />;
+  else if (page === 'calculators') content = <Calculators />;
   else content = <Dashboard />;
 
   return <div className="flex min-h-screen bg-[#f5f7fb]">

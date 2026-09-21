@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Korea Import Calculator 86</title>
+<style>
+:root {
+  --ink: #191919;
+  --accent: #2f5d9c;
+  --accent-dark: #1f4170;
+  --soft: #f3f5f9;
+  --line: #d9dee6;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  background: linear-gradient(180deg, #eef2f7 0%, #f9fafc 100%);
+  color: var(--ink);
+}
+.wrap { max-width: 640px; margin: auto; padding: 20px 16px 24px; }
+h1 { font-size: 26px; text-align: center; margin: 8px 0 2px; }
+.sub { text-align: center; font-size: 15px; color: #5c6670; margin-bottom: 14px; }
+.card {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px;
+  box-shadow: 0 6px 18px rgba(20, 40, 70, 0.07);
+}
+label { display: block; font-size: 14px; font-weight: 600; margin: 8px 0 4px; }
+input[type="text"], select {
+  width: 100%;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 16px;
+  background: #fff;
+  color: var(--ink);
+}
+input:focus, select:focus { outline: 2px solid var(--accent); border-color: var(--accent); }
+.btn-row { display: flex; gap: 8px; margin-top: 14px; }
+.btn {
+  flex: 1;
+  padding: 12px 10px;
+  border: medium;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.btn:hover { background: var(--accent-dark); }
+.btn:active { transform: translateY(1px); }
+.btn.ghost { background: #fff; color: var(--accent-dark); border: 1px solid var(--accent); }
+#error { min-height: 18px; margin: 8px 0 0; font-size: 14px; color: #b3322c; }
+.result {
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 10px;
+  background: var(--soft);
+  border: 1px solid var(--line);
+  font-size: 15px;
+  line-height: 1.5;
+  white-space: pre-line;
+}
+.result .total { margin-top: 6px; font-size: 24px; font-weight: 800; color: var(--accent-dark); }
+.status { margin-top: 8px; font-size: 13px; color: #3d6dbb; }
+.hint { margin-top: 12px; font-size: 13px; color: #68727d; }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <h1>Korea Import Calculator 86</h1>
+  <p class="sub">KRW → EUR → крайна себестойност в България</p>
+  <section class="card">
+    <form id="calcForm" autocomplete="off">
+      <label for="krw">Цена в KRW, напр. 45 000 000</label>
+      <input type="text" id="krw" name="krw" placeholder="напр. 45 000 000" inputmode="numeric">
+      <label for="year">Година</label>
+      <select id="year" name="year"></select>
+      <label for="type">Тип автомобил</label>
+      <select id="type" name="type">
+        <option value="0">Седан</option>
+        <option value="1">SUV / Джип</option>
+        <option value="2">Голям 7-местен SUV</option>
+      </select>
+      <div class="btn-row">
+        <button class="btn" type="submit">ИЗЧИСЛИ</button>
+      </div>
+      <div id="error"></div>
+    </form>
+    <div class="status" id="status">Въведи цена в KRW и натисни „Изчисли“.</div>
+    <div class="result" id="result" hidden></div>
+  </section>
+  <p class="hint">Курсът е фиксиран: 1 EUR = 1 454,55 KRW.</p>
+</main>
+<script src="/calculators/korea/calculate.js"></script>
+</body>
+</html>
