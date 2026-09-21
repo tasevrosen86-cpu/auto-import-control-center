@@ -47,6 +47,11 @@ async function processJob(job){
  let item;try{item=await payload(job);}catch(error){return finish(job,'FAILED',{},String(error));}
  const check=preflight(item);if(!check.ok)return finish(job,'FAILED',{preflight:check},check.failures.map(x=>x.message).join(' '));
  if(process.env.PUBLICATIONS_REAL_PUBLISH_ENABLED!=='true')return finish(job,'WAITING_CONFIRMATION',{preflight:check,transport:describeTransport()},'Защитният превключвател за реално публикуване е изключен.');
+ const approvedDraft=process.env.PUBLICATIONS_REAL_PUBLISH_DRAFT_ID||'';
+ if(approvedDraft&&job.draft_id!==approvedDraft)return finish(job,'WAITING_CONFIRMATION',{},'Реалният тест е разрешен само за конкретната потвърдена чернова.');
+ const previous=await db.from('publication_publish_jobs').select('id,public_url').eq('draft_id',job.draft_id).not('public_url','is',null).limit(1);
+ if(previous.error)return finish(job,'FAILED',{},'Проверката за вече публикувана обява не успя: '+previous.error.message);
+ if(previous.data?.length)return finish(job,'COMPLETED',{listing_url:previous.data[0].public_url,reused_existing_publication:true});
  let session;
  try{
   session=await openSession();await openForm(session);const login=await ensureLoggedIn(session);const form=await inspectForm(session);
