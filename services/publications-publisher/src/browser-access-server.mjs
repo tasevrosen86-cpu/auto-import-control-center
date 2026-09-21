@@ -33,10 +33,16 @@ async function signInOnce(page) {
   if (!username || !password) return 'credentials_not_configured';
   if (await loggedIn(page)) return 'already_logged_in';
 
-  const directLogin = page.getByRole('link', { name: /^Вход$/ }).first();
-  if (await directLogin.count()) {
-    await directLogin.click();
-    await page.waitForTimeout(1000);
+  // Mobile.bg combines the words “Вход | Нова Регистрация” in one
+  // navigational link, so an exact accessible name is not reliable here.
+  const loginLink = page.locator('a').filter({ hasText: /Вход/i }).first();
+  const loginButton = page.locator('button').filter({ hasText: /Вход/i }).first();
+  if (await loginLink.count()) {
+    await loginLink.click();
+    await page.waitForTimeout(1500);
+  } else if (await loginButton.count()) {
+    await loginButton.click();
+    await page.waitForTimeout(1500);
   }
   const passwordInput = page.locator('input[type="password"]:visible').first();
   if (!(await passwordInput.count())) return 'login_form_not_found';
