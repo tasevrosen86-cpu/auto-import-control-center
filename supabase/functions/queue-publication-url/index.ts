@@ -93,7 +93,7 @@ export default {
       if (fieldsError || imagesError || extrasError) return reply({ error: 'Пълната чернова не можа да бъде прочетена.', detail: fieldsError?.message || imagesError?.message || extrasError?.message }, 500);
 
       const { data: copiedDraft, error: copiedDraftError } = await ctx.supabaseAdmin.from('publication_drafts').insert({
-        owner_id: ctx.userClaims.id, title: sourceDraft.title, status: sourceDraft.status === 'READY' ? 'READY_FOR_REVIEW' : sourceDraft.status,
+        owner_id: ctx.userClaims.id, title: sourceDraft.title, status: sourceDraft.status === 'ERROR' ? 'ERROR' : (sourceDraft.status === 'READY' || sourceDraft.status === 'APPROVED' ? 'READY_FOR_REVIEW' : 'DRAFT'),
         source_type: sourceDraft.source_type || source.source_type, source_url: source.source_url,
         source_listing_id: sourceDraft.source_listing_id || source.source_listing_id, source_vin: sourceDraft.source_vin,
         source_price_eur: sourceDraft.source_price_eur, price_eur: sourceDraft.price_eur, currency: sourceDraft.currency || 'EUR',
