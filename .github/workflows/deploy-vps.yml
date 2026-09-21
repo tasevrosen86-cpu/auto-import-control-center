@@ -75,6 +75,7 @@ jobs:
           PUBLICATIONS_DESCRIPTION: ${{ secrets.PUBLICATIONS_DESCRIPTION }}
           PUBLICATIONS_CDP_URL: ${{ secrets.PUBLICATIONS_CDP_URL }}
           PUBLICATIONS_CHROME_EXECUTABLE_PATH: ${{ secrets.PUBLICATIONS_CHROME_EXECUTABLE_PATH }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           umask 077
           if [ -z "$BROWSER_USE_API_KEY" ]; then
@@ -88,6 +89,7 @@ jobs:
             printf 'PUBLICATIONS_MOBILE_BG_PASSWORD=%s\n' "$MOBILE_BG_PASSWORD"
             printf 'SUPABASE_URL=%s\n' 'https://cgftjqwebvddtsbcbeml.supabase.co'
             printf 'SUPABASE_ANON_KEY=%s\n' 'sb_publishable_3szh1-AiAAUYDeVBwO7bJQ_gXhkBU0A'
+            printf 'SUPABASE_SERVICE_ROLE_KEY=%s\n' "$SUPABASE_SERVICE_ROLE_KEY"
             printf 'PUBLICATIONS_CONTACT_PHONE=%s\n' "${PUBLICATIONS_CONTACT_PHONE:-0887353653}"
             printf 'PUBLICATIONS_DESCRIPTION=%s\n' "${PUBLICATIONS_DESCRIPTION:-!!!реална крайна цена!!!}"
             printf 'PUBLICATIONS_WORKER_NAME=%s\n' 'aicc-publications-publisher'
@@ -185,36 +187,12 @@ jobs:
           npx playwright install --with-deps chromium
           sudo apt-get update
           sudo apt-get install -y xvfb x11vnc novnc websockify
-          mkdir -p /home/ubuntu/.local/share/aicc-publications-chrome
-          sudo install -m 600 /tmp/publications.env /etc/aicc-publications.env
-          rm -f /tmp/publications-publisher.tar.gz /tmp/publications.env
-
-          SOURCE_KEY=""
-          # The service role key may be exported in the unit Environment, or
-          # loaded from an EnvironmentFile. Read both: checking only Environment
-          # silently misses the common case and left the publisher running with
-          # the public key, which cannot see the queue.
-          for UNIT_NAME in $(systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '$1 ~ /(source|intake|worker|import|publish)/ {print $1}'); do
-            UNIT_ENV="$(sudo systemctl show "$UNIT_NAME" --property=Environment --value 2>/dev/null || true)"
-            CANDIDATE_KEY="$(printf '%s' "$UNIT_ENV" | tr ' ' '\n' | sed -n 's/^SUPABASE_SERVICE_ROLE_KEY=//p' | head -n 1)"
-            if [ -z "$CANDIDATE_KEY" ]; then
-              for ENV_FILE in $(sudo systemctl show "$UNIT_NAME" --property=EnvironmentFiles --value 2>/dev/null | tr ' ' '\n' | sed 's/^-//' | awk 'NF'); do
-                if [ -r "$ENV_FILE" ]; then
-                  CANDIDATE_KEY="$(sudo sed -n 's/^SUPABASE_SERVICE_ROLE_KEY=//p' "$ENV_FILE" | head -n 1)"
-                fi
-                [ -n "$CANDIDATE_KEY" ] && break
-              done
-            fi
-            if [ -n "$CANDIDATE_KEY" ]; then
-              SOURCE_KEY="$CANDIDATE_KEY"
-              break
-            fi
-          done
-          if [ -n "$SOURCE_KEY" ]; then
-            printf 'SUPABASE_SERVICE_ROLE_KEY=%s\n' "$SOURCE_KEY" | sudo tee -a /etc/aicc-publications.env >/dev/null
-            echo "Publications worker will use the service role key from $UNIT_NAME."
-          else
-            echo "::warning::No SUPABASE_SERVICE_ROLE_KEY found on the server. The publisher will run with the public key and cannot read the queue."
+          mkdir -p /home/ubuntu/.local/share/aicc-publications-c          if [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
+            echo "::error::SUPABASE_SERVICE_ROLE_KEY is missing; refusing to start Publications worker."
+            exit 1
+          fi
+          echo "Publications worker will use the configured server-only Supabase secret."
+        echo "::warning::No SUPABASE_SERVICE_ROLE_KEY found on the server. The publisher will run with the public key and cannot read the queue."
           fi
 
           NPM_BIN="$(command -v npm)"
