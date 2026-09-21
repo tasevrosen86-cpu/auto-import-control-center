@@ -192,8 +192,6 @@ jobs:
             exit 1
           fi
           echo "Publications worker will use the configured server-only Supabase secret."
-        echo "::warning::No SUPABASE_SERVICE_ROLE_KEY found on the server. The publisher will run with the public key and cannot read the queue."
-          fi
 
           NPM_BIN="$(command -v npm)"
           SOURCE_ENV_FILE="$(systemctl show "$SOURCE_INTAKE_UNIT" --property=EnvironmentFiles --value 2>/dev/null | tr ' ' '\n' | sed 's/^-//' | awk 'NF {print; exit}')"
