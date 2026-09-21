@@ -488,7 +488,7 @@ jobs:
           NGINX
           # Some VPS images use the default server name, so locate the active
           # site by its actual document root rather than by an assumed filename.
-          AICC_SITE_CONF="$(sudo nginx -T 2>&1 | awk '/^# configuration file / {p=$4; sub(/:$/, "", p)} index($0, "/var/www/html") {print p; exit}')"
+          AICC_SITE_CONF="$(sudo nginx -T 2>&1 | awk '/^# configuration file / {p=$4; sub(/:$/, "", p)} index($0, "/var/www/html") && !found {print p; found=1}')"
           if [ -z "$AICC_SITE_CONF" ] || [ ! -f "$AICC_SITE_CONF" ]; then
             for CANDIDATE in /etc/nginx/sites-enabled/default /etc/nginx/sites-available/default; do
               if [ -f "$CANDIDATE" ]; then AICC_SITE_CONF="$CANDIDATE"; break; fi
