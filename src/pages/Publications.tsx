@@ -106,7 +106,14 @@ export function Publications(){
     if(!sessionData.session?.access_token){setBusy(false);setError('Сесията е изтекла. Влезте отново в сайта.');return;}
     const {data,error:invokeError}=await supabase.functions.invoke('queue-publication-publish',{body:{draft_id:draft.id},headers:{Authorization:`Bearer ${sessionData.session.access_token}`}});
     setBusy(false);
-    if(invokeError||data?.error){let detail=data?.error as string|undefined;if(!detail&&invokeError&&'context'in invokeError){try{detail=(await(invokeError as {context:Response}).context.json()).error;}catch{}}setError(detail||invokeError?.message||'Заявката за публикуване не успя.');return;}
+    if(invokeError||data?.error){
+      let detail=data?.error as string|undefined;
+      const serverDetail=typeof data?.detail==='string'?data.detail.trim():'';
+      if(serverDetail) detail=`${detail||'Заявката за публикуване не успя.'}: ${serverDetail}`;
+      if(!detail&&invokeError&&'context'in invokeError){try{const payload=await(invokeError as {context:Response}).context.json();detail=payload?.detail?`${payload.error||'Заявката за публикуване не успя.'}: ${payload.detail}`:payload?.error;}catch{}}
+      setError(detail||invokeError?.message||'Заявката за публикуване не успя.');
+      return;
+    }
     setNotice(data?.already_queued?'Черновата вече е в собствената опашка за публикуване.':'Заявката е добавена. Първо ще се провери браузърната сесия и формата.');void load();
   }
   const currentPublish=publishJobs.find(item=>item.draft_id===draft?.id);
