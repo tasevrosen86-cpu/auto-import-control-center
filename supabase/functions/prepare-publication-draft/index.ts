@@ -26,7 +26,7 @@ export default {
     ]);
     if(fieldsError || imagesError) return reply({error:'Черновата не можа да бъде проверена.',detail:fieldsError?.message||imagesError?.message},500);
     const values=new Map((fields||[]).map((row:any)=>[row.field_key,String(row.value||'').trim()]));
-    const required=['make','model','year','mileage','fuel','gearbox'];
+    const required=['category','make','model','year','month','mileage','fuel','gearbox','location'];
     const missing=required.filter(key=>!values.get(key));
     if(missing.length || !(images||[]).length) return reply({error:'Липсват: '+[...missing,...((images||[]).length?[]:['снимки'])].join(', ')},422);
 
