@@ -97,7 +97,8 @@ jobs:
             printf 'PUBLICATIONS_CDP_URL=%s\n' 'http://127.0.0.1:9222'
             printf 'PUBLICATIONS_CHROME_EXECUTABLE_PATH=%s\n' "$PUBLICATIONS_CHROME_EXECUTABLE_PATH"
             printf 'PUBLICATIONS_CHROME_USER_DATA_DIR=%s\n' '/home/ubuntu/.local/share/aicc-publications-chrome'
-            printf 'PUBLICATIONS_REAL_PUBLISH_ENABLED=%s\n' 'false'
+            printf 'PUBLICATIONS_REAL_PUBLISH_ENABLED=%s\n' 'true'
+            printf 'PUBLICATIONS_REAL_PUBLISH_DRAFT_ID=%s\n' '51a6e15f-b7d5-4dbd-8a63-12b1f5fe8272'
           } > publications.env
 
       - name: Upload and activate website, workers and publisher
@@ -399,11 +400,10 @@ jobs:
             echo "::warning::BROWSER_USE_API_KEY is empty in /etc/aicc-publications.env."
           fi
 
-          # The queue was verified before this deployment. The worker runs once
-          # per minute, but PUBLICATIONS_REAL_PUBLISH_ENABLED=false makes every
-          # job stop at WAITING_CONFIRMATION before any Mobile.bg form is sent.
+          # Real publishing is enabled for the explicitly approved BMW draft only.
+          # The worker keeps other drafts waiting and reuses recorded public URLs.
           sudo systemctl enable --now aicc-publications.timer
-          echo "Publications timer is active in confirmation-only mode."
+          echo "Publications timer is active for the approved real-publication test."
 
           # Expose only the live browser view needed for a one-time manual
           # Mobile.bg sign-in. VNC itself remains localhost-only. Nginx asks the
