@@ -42,6 +42,34 @@ async function signedOutNavigation(page) {
       .slice(0, 12)).catch(() => []);
     candidates.push(...links.map((item) => ({ ...item, frame: frameUrl })));
   }
+  // When the page renders text without a clickable anchor, record the DOM
+  // neighbourhood of that text. This is a safe structural diagnostic: it never
+  // includes form values, cookies or credentials.
+  for (const frame of page.frames()) {
+    const frameUrl = frame.url();
+    const textNodes = await frame.evaluate(() => {
+      const hits = [];
+      const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT);
+      let node;
+      while ((node = walker.nextNode()) && hits.length < 6) {
+        if (!/вход/i.test(node.nodeValue || '')) continue;
+        let parent = node.parentElement;
+        const ancestors = [];
+        for (let i = 0; parent && i < 4; i += 1, parent = parent.parentElement) {
+          ancestors.push({
+            tag: parent.tagName.toLowerCase(),
+            text: (parent.innerText || parent.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 120),
+            href: parent.getAttribute('href') || '',
+            onclick: parent.getAttribute('onclick') || '',
+            html: parent.outerHTML.slice(0, 500),
+          });
+        }
+        hits.push(ancestors);
+      }
+      return hits;
+    }).catch(() => []);
+    if (textNodes.length) candidates.push({ frame: frameUrl, text_nodes: textNodes });
+  }
   return candidates.slice(0, 12);
 }
 async function signInOnce(page) {
