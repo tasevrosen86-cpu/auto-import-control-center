@@ -388,7 +388,8 @@ jobs:
 
           sudo systemctl daemon-reload
           sudo systemctl disable --now aicc-publications-display.service aicc-publications-browser.service aicc-publications-vnc.service aicc-publications-vnc-web.service || true
-          sudo systemctl enable --now aicc-publications-browser-access.service
+          sudo systemctl enable aicc-publications-browser-access.service
+          sudo systemctl restart aicc-publications-browser-access.service
           if ! sudo systemctl start aicc-publications-browser-test.service; then
             sudo journalctl -u aicc-publications-browser-test.service -n 100 --no-pager
             exit 1
