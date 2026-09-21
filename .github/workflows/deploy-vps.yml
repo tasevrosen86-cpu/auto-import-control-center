@@ -399,10 +399,11 @@ jobs:
             echo "::warning::BROWSER_USE_API_KEY is empty in /etc/aicc-publications.env."
           fi
 
-          # The queue and self-hosted Chrome gate must pass first. Until then the
-          # publisher is installed but stopped, so no failing run repeats every minute.
-          sudo systemctl disable --now aicc-publications.timer || true
-          echo "Publications timer is installed but intentionally stopped until queue verification."
+          # The queue was verified before this deployment. The worker runs once
+          # per minute, but PUBLICATIONS_REAL_PUBLISH_ENABLED=false makes every
+          # job stop at WAITING_CONFIRMATION before any Mobile.bg form is sent.
+          sudo systemctl enable --now aicc-publications.timer
+          echo "Publications timer is active in confirmation-only mode."
 
           # Expose only the live browser view needed for a one-time manual
           # Mobile.bg sign-in. VNC itself remains localhost-only. Nginx asks the
