@@ -338,12 +338,65 @@ function normalizeDrivetrain(value: string | null): string | null {
   if (source.includes('front') || source.includes('fwd')) return 'Предно';
   return value;
 }
+type DraftExtra = { key: string; label: string; group: string; selected: boolean; proof: string; source: string };
+
+const EXTRA_RULES: Array<{ key: string; label: string; group: string; match: RegExp }> = [
+  { key: 'bluetooth', label: 'Bluetooth', group: 'Комфорт', match: /\\bbluetooth\\b/i },
+  { key: 'usb', label: 'USB', group: 'Комфорт', match: /\\busb\\b/i },
+  { key: 'navigation', label: 'Навигация', group: 'Комфорт', match: /\\b(?:navigation|gps)\\b/i },
+  { key: 'rear_camera', label: 'Камера за задно виждане', group: 'Комфорт', match: /(?:rear|backup)\\s*camera/i },
+  { key: 'parking_sensors', label: 'Парктроник', group: 'Комфорт', match: /(?:parking|park)\\s*(?:sensor|assist)|park\\s*distance/i },
+  { key: 'cruise_control', label: 'Автопилот', group: 'Комфорт', match: /\\b(?:adaptive\\s+)?cruise\\s+control\\b/i },
+  { key: 'leather', label: 'Кожен салон', group: 'Комфорт', match: /(?:leather|nappa)\\s*(?:seat|interior|trim|upholstery)?/i },
+  { key: 'heated_seats', label: 'Подгрев на седалки', group: 'Комфорт', match: /(?:heated|heating)\\s*(?:front\\s*)?seats?/i },
+  { key: 'electric_seats', label: 'Ел. регулиране на седалки', group: 'Комфорт', match: /(?:power|electric)\\s*(?:front\\s*)?seats?/i },
+  { key: 'keyless_go', label: 'Keyless Go', group: 'Защита', match: /(?:keyless|smart\\s*key)/i },
+  { key: 'central_locking', label: 'Централно заключване', group: 'Защита', match: /central\\s*lock/i },
+  { key: 'alarm', label: 'Аларма', group: 'Защита', match: /\\balarm\\b/i },
+  { key: 'led_lights', label: 'LED фарове', group: 'Други', match: /\\bled\\s*(?:head)?lights?/i },
+  { key: 'xenon_lights', label: 'Ксенонови фарове', group: 'Други', match: /\\bxenon\\b/i },
+  { key: 'adaptive_lights', label: 'Адаптивни фарове', group: 'Други', match: /adaptive\\s*(?:head)?lights?/i },
+  { key: 'rain_sensor', label: 'Сензор за дъжд', group: 'Други', match: /rain\\s*sensor/i },
+  { key: 'light_sensor', label: 'Сензор за светлина', group: 'Други', match: /(?:light|dusk)\\s*sensor/i },
+  { key: 'sunroof', label: 'Шибедах', group: 'Други', match: /(?:sunroof|moonroof)/i },
+  { key: 'tow_hitch', label: 'Теглич', group: 'Други', match: /(?:tow\\s*(?:hitch|package)|trailer\\s*hitch)/i },
+  { key: 'winter_tires', label: 'Зимни гуми', group: 'Други', match: /winter\\s*(?:tire|tyre)/i },
+  { key: 'sport_mode', label: 'Спортен режим', group: 'Специализирани', match: /sport\\s*mode/i },
+  { key: 'air_suspension', label: 'Пневматично окачване', group: 'Специализирани', match: /(?:air|pneumatic)\\s*suspension/i },
+  { key: 'adaptive_suspension', label: 'Адаптивно окачване', group: 'Специализирани', match: /adaptive\\s*suspension/i },
+  { key: 'differential_lock', label: 'Диференциална блокировка', group: 'Специализирани', match: /(?:locking|lock)\\s*differential/i },
+  { key: 'offroad_package', label: 'Офроуд пакет', group: 'Специализирани', match: /off[ -]?road\\s*(?:package|pkg)?/i },
+];
+
+function featureStrings(root: unknown): string[] {
+  const values = new Set<string>();
+  const add = (value: unknown) => {
+    const text = scalar(value);
+    if (text && text.length <= 180) values.add(text.replace(/\\s+/g, ' ').trim());
+  };
+  walk(root, record => {
+    for (const [key, value] of Object.entries(record)) {
+      if (!/(?:feature|option|equipment|amenit|package|accessor|comfort|safety)/i.test(key)) continue;
+      if (Array.isArray(value)) value.forEach(item => { add(item); const itemRecord = asRecord(item); add(itemRecord.name); add(itemRecord.label); add(itemRecord.value); add(itemRecord.description); });
+      else { add(value); const valueRecord = asRecord(value); add(valueRecord.name); add(valueRecord.label); add(valueRecord.value); add(valueRecord.description); }
+    }
+  });
+  return [...values];
+}
+
+function extractExtras(root: unknown, proof: string, source: string): DraftExtra[] {
+  const featureText = featureStrings(root).join('\\n');
+  return EXTRA_RULES.filter(rule => rule.match.test(featureText)).map(rule => ({
+    key: rule.key, label: rule.label, group: rule.group, selected: true, proof, source,
+  }));
+}
+
 function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string, detail: ReturnType<typeof valuesFromDetailText> = valuesFromDetailText(''), domImageUrls: string[] = []) {
   const vehicle = vehicleRecord(documents);
   const source = job.source_type;
   const autoDetail = source === 'autotrader_ca' ? autotraderVehicle(documents) : {};
-  const brand = nested(vehicle, 'brand', ['name']) || firstValue(vehicle, ['make', 'manufacturer']);
-  const model = firstValue(vehicle, ['model', 'modelName']);
+  const brand = nested(vehicle, 'brand', ['name']) || firstValue(vehicle, ['make', 'manufacturer']) || scalar(autoDetail.make);
+  const model = firstValue(vehicle, ['model', 'modelName']) || scalar(autoDetail.model);
   const vehicleTitle = withSource([
     ['jsonld.itemListElement', normalizeTitle(listingTitleFromBreadcrumbs(documents))],
     ['page_title', normalizeTitle(pageTitle)],
@@ -366,7 +419,7 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string,
   const year = yearPick.value;
   const mileage = numberText(mileagePick.value);
   const fuel = normalizeFuel(fuelPick.value);
-  const gearbox = normalizeGearbox(detail.gearbox || firstValue(vehicle, ['vehicleTransmission', 'transmission', 'gearbox']));
+  const gearbox = normalizeGearbox(detail.gearbox || firstValue(vehicle, ['vehicleTransmission', 'transmission', 'gearbox']) || scalar(asRecord(autoDetail.transmissionType).formatted) || scalar(autoDetail.transmissionType));
   const power = numberText(detail.power || nested(vehicle, 'vehicleEngine', ['enginePower', 'power']) || firstValue(vehicle, ['horsepower', 'powerHp', 'enginePower']));
   const displacement = numberText(detail.displacement || nested(vehicle, 'vehicleEngine', ['engineDisplacement', 'displacement']) || firstValue(vehicle, ['engineDisplacement', 'displacement']));
   const price = nested(vehicle, 'offers', ['price']) || firstValue(vehicle, ['price', 'salePrice']);
@@ -449,7 +502,7 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string,
       page_title: pageTitle,
     },
     fields,
-    extras: [],
+    extras: extractExtras(documents, job.source_url, source),
     images: payloadImages,
     raw_json: documents,
   };
@@ -504,9 +557,13 @@ async function run() {
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : 'Непозната грешка.';
     await updateJob(job, { status: 'FAILED', error_message: message, finished_at: new Date().toISOString() });
-    if (job.flow !== 'publications' && job.draft_id) {
-      await db.from('mobile_bg_drafts').update({ extraction_status: 'FAILED', extraction_error: message, status: 'ERROR', updated_at: new Date().toISOString() }).eq('id', job.draft_id);
-      await db.from('mobile_bg_draft_action_log').insert({ draft_id: job.draft_id, action: 'SOURCE_JSON_EXTRACTION_FAILED', actor: workerName, details: { message, source_url: job.source_url } });
+    if (job.draft_id) {
+      const isPublication = job.flow === 'publications';
+      const draftTable = isPublication ? 'publication_drafts' : 'mobile_bg_drafts';
+      const logTable = isPublication ? 'publication_draft_action_log' : 'mobile_bg_draft_action_log';
+      const action = isPublication ? 'PUBLICATION_URL_EXTRACTION_FAILED' : 'SOURCE_JSON_EXTRACTION_FAILED';
+      await db.from(draftTable).update({ extraction_status: 'FAILED', extraction_error: message, status: 'ERROR', updated_at: new Date().toISOString() }).eq('id', job.draft_id);
+      await db.from(logTable).insert({ draft_id: job.draft_id, action, actor: workerName, details: { message, source_url: job.source_url } });
     }
     throw cause;
   } finally {
