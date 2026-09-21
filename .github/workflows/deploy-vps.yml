@@ -187,11 +187,10 @@ jobs:
           npx playwright install --with-deps chromium
           sudo apt-get update
           sudo apt-get install -y xvfb x11vnc novnc websockify
-          mkdir -p /home/ubuntu/.local/share/aicc-publications-c          if [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
-            echo "::error::SUPABASE_SERVICE_ROLE_KEY is missing; refusing to start Publications worker."
-            exit 1
-          fi
-          echo "Publications worker will use the configured server-only Supabase secret."
+          mkdir -p /home/ubuntu/.local/share/aicc-publications-chrome
+          sudo install -m 600 /tmp/publications.env /etc/aicc-publications.env
+          rm -f /tmp/publications-publisher.tar.gz /tmp/publications.env
+          echo "Publications worker environment installed with configured server-only Supabase secret."
 
           NPM_BIN="$(command -v npm)"
           SOURCE_ENV_FILE="$(systemctl show "$SOURCE_INTAKE_UNIT" --property=EnvironmentFiles --value 2>/dev/null | tr ' ' '\n' | sed 's/^-//' | awk 'NF {print; exit}')"
