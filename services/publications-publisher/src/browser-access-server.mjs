@@ -27,30 +27,37 @@ async function stopActive() {
 async function loggedIn(page) {
   return page.evaluate(() => Boolean(document.forms.namedItem('pub')?.elements.namedItem('f5'))).catch(() => false);
 }
+async function signedOutNavigation(page) {
+  const candidates = [];
+  for (const frame of page.frames()) {
+    const frameUrl = frame.url();
+    const links = await frame.locator('a').evaluateAll((anchors) => anchors
+      .map((anchor) => ({
+        text: (anchor.innerText || anchor.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80),
+        href: anchor.href || '',
+      }))
+      .filter((item) => /вход|login|sign in/i.test(item.text))
+      .slice(0, 8)).catch(() => []);
+    candidates.push(...links.map((item) => ({ ...item, frame: frameUrl })));
+  }
+  return candidates.slice(0, 12);
+}
 async function signInOnce(page) {
   const username = String(process.env.PUBLICATIONS_MOBILE_BG_USERNAME || '').trim();
   const password = String(process.env.PUBLICATIONS_MOBILE_BG_PASSWORD || '');
-  if (!username || !password) return 'credentials_not_configured';
-  if (await loggedIn(page)) return 'already_logged_in';
+  if (!username || !password) return { state: 'credentials_not_configured' };
+  if (await loggedIn(page)) return { state: 'already_logged_in' };
 
-  // The signed-out Mobile.bg shell embeds navigation in frames. Search every
-  // frame rather than assuming the login link sits in the top document.
-  let loginFrame = null;
-  for (const frame of page.frames()) {
-    const link = frame.locator('a').filter({ hasText: /Вход/i }).first();
-    const button = frame.locator('button').filter({ hasText: /Вход/i }).first();
-    if (await link.count()) {
-      await link.click();
-      loginFrame = frame;
-      break;
-    }
-    if (await button.count()) {
-      await button.click();
-      loginFrame = frame;
-      break;
-    }
+  // First read the actual signed-out navigation. Mobile.bg puts it in a frame;
+  // navigating to the discovered href is more reliable than a synthetic click.
+  const candidates = await signedOutNavigation(page);
+  const directLogin = candidates.find((item) => /^https?:/i.test(item.href));
+  if (directLogin) {
+    await page.goto(directLogin.href, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+    await page.waitForTimeout(1000);
+  } else {
+    return { state: 'login_link_not_found', candidates };
   }
-  if (loginFrame) await page.waitForTimeout(1500);
 
   let formFrame = null;
   let passwordInput = null;
@@ -62,7 +69,7 @@ async function signInOnce(page) {
       break;
     }
   }
-  if (!formFrame || !passwordInput) return 'login_form_not_found';
+  if (!formFrame || !passwordInput) return { state: 'login_form_not_found', candidates };
 
   const inputs = formFrame.locator('input:visible');
   const count = await inputs.count();
@@ -79,7 +86,7 @@ async function signInOnce(page) {
       if (type === 'text' || type === 'email') { userIndex = index; break; }
     }
   }
-  if (userIndex < 0) return 'username_field_not_found';
+  if (userIndex < 0) return { state: 'username_field_not_found', candidates };
 
   await inputs.nth(userIndex).fill(username);
   await passwordInput.fill(password);
@@ -87,7 +94,7 @@ async function signInOnce(page) {
   await page.waitForTimeout(2500);
   await page.goto(entryUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 });
   await page.waitForTimeout(1500);
-  return (await loggedIn(page)) ? 'logged_in' : 'login_not_confirmed';
+  return { state: (await loggedIn(page)) ? 'logged_in' : 'login_not_confirmed', candidates };
 }
 async function openLiveBrowser() {
   await stopActive();
@@ -96,7 +103,7 @@ async function openLiveBrowser() {
     await stopBrowser(created.id).catch(() => undefined);
     throw new Error('Browser Use не върна адрес за видимия браузър.');
   }
-  let login = 'not_attempted';
+  let login = { state: 'not_attempted' };
   try {
     const browser = await chromium.connectOverCDP(created.cdpUrl);
     const context = browser.contexts()[0] || await browser.newContext();
@@ -130,7 +137,7 @@ const server = http.createServer(async (request, response) => {
   }
   try {
     const opened = await openLiveBrowser();
-    json(response, 200, { live_url: opened.liveUrl, login: opened.login, expires_in_seconds: Math.floor(lifetimeMs / 1000) });
+    json(response, 200, { live_url: opened.liveUrl, login: opened.login.state, expires_in_seconds: Math.floor(lifetimeMs / 1000) });
   } catch (error) {
     console.error('Browser Use manual access failed:', error instanceof Error ? error.message : error);
     json(response, 502, { error: 'Неуспешно отваряне на Browser Use браузъра. Проверете Browser Use профила и наличния баланс.' });
