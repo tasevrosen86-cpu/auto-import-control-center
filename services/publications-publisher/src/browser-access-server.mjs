@@ -91,7 +91,17 @@ async function openLiveBrowser() {
 }
 
 const server = http.createServer(async (request, response) => {
-  if (request.method !== 'POST' || request.url?.split('?')[0] !== '/open') {
+  const path = request.url?.split('?')[0];
+  if (request.method !== 'POST') {
+    json(response, 404, { error: 'Not found' });
+    return;
+  }
+  if (path === '/close') {
+    await stopActive();
+    json(response, 200, { closed: true });
+    return;
+  }
+  if (path !== '/open') {
     json(response, 404, { error: 'Not found' });
     return;
   }
