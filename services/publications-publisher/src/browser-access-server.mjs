@@ -33,21 +33,38 @@ async function signInOnce(page) {
   if (!username || !password) return 'credentials_not_configured';
   if (await loggedIn(page)) return 'already_logged_in';
 
-  // Mobile.bg combines the words “Вход | Нова Регистрация” in one
-  // navigational link, so an exact accessible name is not reliable here.
-  const loginLink = page.locator('a').filter({ hasText: /Вход/i }).first();
-  const loginButton = page.locator('button').filter({ hasText: /Вход/i }).first();
-  if (await loginLink.count()) {
-    await loginLink.click();
-    await page.waitForTimeout(1500);
-  } else if (await loginButton.count()) {
-    await loginButton.click();
-    await page.waitForTimeout(1500);
+  // The signed-out Mobile.bg shell embeds navigation in frames. Search every
+  // frame rather than assuming the login link sits in the top document.
+  let loginFrame = null;
+  for (const frame of page.frames()) {
+    const link = frame.locator('a').filter({ hasText: /Вход/i }).first();
+    const button = frame.locator('button').filter({ hasText: /Вход/i }).first();
+    if (await link.count()) {
+      await link.click();
+      loginFrame = frame;
+      break;
+    }
+    if (await button.count()) {
+      await button.click();
+      loginFrame = frame;
+      break;
+    }
   }
-  const passwordInput = page.locator('input[type="password"]:visible').first();
-  if (!(await passwordInput.count())) return 'login_form_not_found';
+  if (loginFrame) await page.waitForTimeout(1500);
 
-  const inputs = page.locator('input:visible');
+  let formFrame = null;
+  let passwordInput = null;
+  for (const frame of page.frames()) {
+    const candidate = frame.locator('input[type="password"]:visible').first();
+    if (await candidate.count()) {
+      formFrame = frame;
+      passwordInput = candidate;
+      break;
+    }
+  }
+  if (!formFrame || !passwordInput) return 'login_form_not_found';
+
+  const inputs = formFrame.locator('input:visible');
   const count = await inputs.count();
   let userIndex = -1;
   for (let index = 0; index < count; index += 1) {
