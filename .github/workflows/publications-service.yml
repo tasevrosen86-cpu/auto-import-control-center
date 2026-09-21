@@ -16,11 +16,11 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: 'stop | start | status'
+        description: 'status | probe | stop | start'
         required: true
         default: status
         type: choice
-        options: [status, stop, start]
+        options: [status, probe, stop, start]
 
 permissions:
   contents: read
@@ -67,7 +67,70 @@ jobs:
             status)
               echo "### Само проверка"
               ;;
+            probe)
+              echo "### Проверка на браузъра"
+              ;;
           esac
+
+          echo
+          echo "### Състояние на браузърните unit-и"
+          for U in aicc-publications-display aicc-publications-browser aicc-publications-vnc aicc-publications-vnc-web; do
+            printf '%-34s active=%-10s enabled=%s\n' "$U" \
+              "$(systemctl is-active "$U.service" 2>&1)" \
+              "$(systemctl is-enabled "$U.service" 2>&1)"
+          done
+          echo
+          echo "### Процеси"
+          pgrep -a Xvfb 2>/dev/null | head -3 || echo "(няма Xvfb)"
+          pgrep -a chrome 2>/dev/null | head -3 | cut -c1-120 || echo "(няма Chrome)"
+          echo
+          echo "### CDP на 9222 отговаря ли"
+          if curl -sf --max-time 5 http://127.0.0.1:9222/json/version 2>/dev/null; then
+            echo "  → CDP жие"
+          else
+            echo "  → CDP НЕ отговаря"
+          fi
+          echo
+          echo "### Порт 9222 слуша ли"
+          (sudo ss -ltnp 2>/dev/null || ss -ltn 2>/dev/null || netstat -ltn 2>/dev/null) | grep -E ":9222|:6080|:5900" || echo "(нищо не слуша на 9222/6080/5900)"
+
+          if [ "$ACTION" = "probe" ]; then
+            # browser-test is run through systemd rather than `sudo -u ubuntu env`,
+            # because the previous attempt there produced an empty environment and
+            # died on index.mjs line 9 before it ever opened the form. A transient
+            # unit reads the same EnvironmentFile production reads, so this also
+            # proves the real credential path instead of a hand-built one.
+            echo
+            echo "### Пускам browser-test през systemd"
+            sudo tee /etc/systemd/system/aicc-publications-probe.service >/dev/null <<'PROBE'
+          [Unit]
+          Description=One-off Publications browser probe (read-only, publishes nothing)
+          After=network-online.target
+
+          [Service]
+          Type=oneshot
+          User=ubuntu
+          WorkingDirectory=/home/ubuntu/auto-import-control-center/services/publications-publisher
+          Environment=DISPLAY=:99
+          EnvironmentFile=/etc/aicc-publications.env
+          # /usr/bin/env resolves node at exec time; systemd does not expand $(...).
+          ExecStart=/usr/bin/env node src/index.mjs browser-test
+          TimeoutStartSec=240
+          PROBE
+            sudo systemctl daemon-reload
+            sudo systemctl reset-failed aicc-publications-probe.service 2>/dev/null || true
+            sudo systemctl start aicc-publications-probe.service || true
+            # browser-test drives a real remote browser and can take minutes, so
+            # poll instead of guessing a sleep. Capped so a hung run cannot hold
+            # the deploy open for ever.
+            for _ in $(seq 1 60); do
+              sudo systemctl is-active --quiet aicc-publications-probe.service || break
+              sleep 5
+            done
+            sudo journalctl -u aicc-publications-probe.service -n 80 --no-pager 2>&1 | tail -80
+            echo
+            printf 'probe резултат: %s\n' "$(systemctl show aicc-publications-probe.service -p Result --value 2>/dev/null)"
+          fi
 
           echo
           echo "### Състояние"
