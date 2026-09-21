@@ -398,6 +398,17 @@ jobs:
           echo "Publications Browser Use access service state:"
           sudo systemctl --no-pager --full status aicc-publications-browser-access.service | sed -n '1,25p' || true
 
+          # One controlled sign-in test. It opens Browser Use with the protected
+          # Publications credentials, checks the saved profile, then stops the
+          # paid browser immediately. No draft is read and no listing is filled.
+          LOGIN_JSON="$(curl --max-time 90 --silent --show-error --fail -X POST http://127.0.0.1:6081/open || true)"
+          LOGIN_STATE="$(node -e 'try { console.log(JSON.parse(process.argv[1]).login || "request_failed") } catch { console.log("request_failed") }' "$LOGIN_JSON")"
+          echo "Browser Use Mobile.bg sign-in result: $LOGIN_STATE"
+          curl --max-time 20 --silent --show-error --fail -X POST http://127.0.0.1:6081/close >/dev/null || true
+          if [ "$LOGIN_STATE" != "logged_in" ] && [ "$LOGIN_STATE" != "already_logged_in" ]; then
+            echo "::warning::Browser Use did not confirm Mobile.bg login: $LOGIN_STATE"
+          fi
+
           # The environment file holds the Browser Use token, so a readable
           # permission is a leak. Refuse to start rather than run with it exposed.
           PERM="$(sudo stat -c '%a' /etc/aicc-publications.env)"
