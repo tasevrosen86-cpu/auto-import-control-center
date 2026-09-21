@@ -405,6 +405,9 @@ jobs:
           LOGIN_JSON="$(curl --max-time 90 --silent --show-error --fail -X POST http://127.0.0.1:6081/open || true)"
           LOGIN_STATE="$(node -e 'try { console.log(JSON.parse(process.argv[1]).login || "request_failed") } catch { console.log("request_failed") }' "$LOGIN_JSON")"
           echo "Browser Use Mobile.bg sign-in result: $LOGIN_STATE"
+          if [ "$LOGIN_STATE" != "logged_in" ] && [ "$LOGIN_STATE" != "already_logged_in" ]; then
+            node -e 'try { const x=JSON.parse(process.argv[1]); console.log("Browser Use login controls:", JSON.stringify(x.login_diagnostics || [])) } catch {}' "$LOGIN_JSON"
+          fi
           curl --max-time 20 --silent --show-error --fail -X POST http://127.0.0.1:6081/close >/dev/null || true
           if [ "$LOGIN_STATE" != "logged_in" ] && [ "$LOGIN_STATE" != "already_logged_in" ]; then
             echo "::warning::Browser Use did not confirm Mobile.bg login: $LOGIN_STATE"
