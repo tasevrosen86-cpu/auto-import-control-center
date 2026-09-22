@@ -3,7 +3,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { openSession, describeTransport } from './session.mjs';
-import { inspectForm, publishOne, openForm, ensureLoggedIn } from './form.mjs';
+import { inspectForm, publishOne, openForm, ensureLoggedIn, fillListing } from './form.mjs';
 import { preflight } from './preflight.mjs';
 
 // Browser diagnostics must not need database credentials. The database client is
@@ -60,9 +60,38 @@ async function processJob(job){
   return finish(job,result.state==='published'?'COMPLETED':'FAILED',result,result.state==='published'?null:result.message||'Mobile.bg не потвърди публикацията.');
  }catch(error){return finish(job,'FAILED',{},String(error));}finally{await session?.close().catch(()=>undefined);}
 }
+// Dry run for one draft: fills the real Mobile.bg form with that draft's own
+// values and stops. It never submits and never touches the file input, so it
+// cannot create a listing — which is precisely why it is safe to run against
+// production before the real thing. Its job is to answer "would every mapped
+// value be accepted", and it answers with the page's own chosen option text, not
+// with an internal value.
+//
+// Usage: node src/index.mjs fill-test <draft-id>
+export async function fillTest(draftId){
+ if(!db) throw new Error('Липсва SUPABASE_SERVICE_ROLE_KEY: няма достъп до черновата.');
+ if(!draftId) throw new Error('Дай draft_id: node src/index.mjs fill-test <draft-id>');
+ const item=await payload({draft_id:draftId});
+ const check=preflight(item);
+ const session=await openSession();
+ try{
+  await openForm(session);
+  const login=await ensureLoggedIn(session);
+  const form=await inspectForm(session);
+  if(login.state!=='already_logged_in'||!form.form_found) return {verdict:'NO_SESSION',login_state:login.state,form:form.verdict,transport:describeTransport()};
+  const filled=await fillListing(session,item);
+  return {verdict:'FILLED',draft_id:draftId,transport:describeTransport(),preflight:check,login_state:login.state,...filled};
+ }catch(error){
+  return {verdict:'FILL_FAILED',draft_id:draftId,error:String(error),transport:describeTransport()};
+ }finally{await session.close().catch(()=>undefined);}
+}
 export async function drain(){
  if(!db)throw new Error('Липсва SUPABASE_SERVICE_ROLE_KEY: publisher-ът няма право да чете собствената опашка.');
  const {data,error}=await db.rpc('claim_publication_publish_job',{worker_name:worker});if(error)throw error;
  const job=Array.isArray(data)?data[0]:data;if(!job)return {processed:0};await processJob(job);return {processed:1,job_id:job.id};
 }
-if(process.argv[1]&&import.meta.url===('file://' + process.argv[1])){const command=process.argv[2]||'drain';(command==='browser-test'?browserTest():drain()).then(x=>console.log(JSON.stringify(x))).catch(e=>{console.error(e.message||e);process.exit(1)});}
+if(process.argv[1]&&import.meta.url===('file://' + process.argv[1])){
+ const command=process.argv[2]||'drain';
+ const run=command==='browser-test'?browserTest():command==='fill-test'?fillTest(process.argv[3]):drain();
+ run.then(x=>console.log(JSON.stringify(x,null,2))).catch(e=>{console.error(e.message||e);process.exit(1)});
+}

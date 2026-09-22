@@ -166,56 +166,81 @@ const CONTACT_PHONE = process.env.PUBLICATIONS_CONTACT_PHONE || '0887353653';
 // company template is recorded anywhere, so the fallback is kept, not invented.
 const DEFAULT_DESCRIPTION = process.env.PUBLICATIONS_DESCRIPTION || '!!!реална крайна цена!!!';
 
+// Fills step one of the form and reads the values back. It never submits, never
+// touches the file input and never asks for a public URL, so it can be pointed
+// at the real Mobile.bg page to prove that every mapped value is actually
+// accepted — a real submit is not required to answer that question, and
+// answering it before submitting is what keeps a dry run from creating a
+// half-filled listing. `publishOne` below does the submitting, and it calls this
+// so the two can never fill the form differently.
+export async function fillListing(session, item) {
+  const result = { make: item.make, model: item.model, year: item.year, price_eur: item.price_eur };
+  const makeText = makeLabel(item.make);
+  const modelText = modelLabel(item.make, item.model);
+  const gearboxText = item.gearbox_label || transmissionLabel(item.transmission);
+  const fuelText = item.fuel_label || fuelLabel(item.fuel);
+  const colourText = item.color_label || colorLabel(item.color);
+  const bodyText = item.body_label || bodyLabel(item);
+
+  await openForm(session);
+  if (!(await selectText(session, 'f5', makeText)).ok) throw new Error(`make_option_missing:${makeText}`);
+  await waitForOptions(session, 'f6');
+  const model = await selectText(session, 'f6', modelText);
+  if (!model?.ok) throw new Error(`model:${JSON.stringify(model)}`);
+  const fields = [
+    ['f8', fuelText, 'select'], ['f25', 'Употребяван', 'select'], ['f9', item.power ?? item.horsepower ?? '', 'input'],
+    ['f12', item.price_eur, 'input'], ['f13', item.currency || 'EUR', 'select'], ['f10', gearboxText, 'select'],
+    // f11 must be set before f18: choosing it is what reloads the area list.
+    ['f11', bodyText, 'select'],
+    ['f31', 'Цената е с включено ДДС', 'select'], ['f16', item.mileage, 'input'],
+    ['f14', resolveMonth(item), 'select'], ['f15', item.year, 'select'], ['f17', colourText, 'select'],
+    ['f18', 'Извън страната', 'select'],
+  ];
+  for (const [name, value, kind] of fields) {
+    const ok = kind === 'select' ? (await selectText(session, name, value)).ok : await setValue(session, name, value, kind);
+    if (!ok) throw new Error(`field_missing_or_invalid:${name}`);
+  }
+  await waitForOptions(session, 'f19');
+  if (!(await selectText(session, 'f19', item.country_label || 'Канада')).ok) throw new Error('country_missing');
+  if (!(await setValue(session, 'f21', item.description ?? DEFAULT_DESCRIPTION, 'textarea'))) throw new Error('field_missing:f21');
+  if (!(await setValue(session, 'f22', CONTACT_PHONE, 'input'))) throw new Error('field_missing:f22');
+
+  // Read back the filled fields. A mismatch means the page refused a value, and
+  // reporting it here is the whole point of a dry run.
+  const readback = await evaluate(session, `(() => {
+    const f = document.forms.namedItem("pub")
+    return {
+      f9: f.elements.f9?.value ?? null, f12: f.elements.f12?.value ?? null, f13: f.elements.f13?.value ?? null,
+      f16: f.elements.f16?.value ?? null, f18: f.elements.f18?.value ?? null, f19: f.elements.f19?.value ?? null,
+      f21: (f.elements.f21?.value ?? '').slice(0, 60), f22: f.elements.f22?.value ?? null,
+    }
+  })()`);
+  // The option *text* is what a person actually sees on the listing, so the
+  // chosen labels come back too, not only the internal option values.
+  const chosen = await evaluate(session, `(() => {
+    const f = document.forms.namedItem("pub")
+    const text = (name) => { const e = f.elements[name]; return e?.selectedOptions?.[0]?.text?.trim() ?? null }
+    return { f5: text('f5'), f6: text('f6'), f8: text('f8'), f10: text('f10'), f11: text('f11'), f13: text('f13'), f14: text('f14'), f15: text('f15'), f17: text('f17'), f18: text('f18'), f19: text('f19'), f31: text('f31') }
+  })()`);
+  result.filled = readback;
+  result.chosen_labels = chosen;
+  if (readback.f22 !== CONTACT_PHONE) throw new Error(`pre_submit_mismatch:f22 (${readback.f22})`);
+  result.state = 'filled';
+  return result;
+}
+
 // Steps kept from the proven script: submit step one through actions=2 rather
 // than hunting for a «Продължи» control, confirm with the exact «Преглед на
 // обявата» text, then check the public page instead of trusting the form.
 export async function publishOne(session, item) {
   const result = { row: item.row, make: item.make, model: item.model, year: item.year, price_eur: item.price_eur };
   try {
-    // The input contract carries internal values, so the translations happen
-    // here, from the tables lifted out of the proven script.
-    const makeText = makeLabel(item.make);
-    const modelText = modelLabel(item.make, item.model);
-    const gearboxText = item.gearbox_label || transmissionLabel(item.transmission);
-    const fuelText = item.fuel_label || fuelLabel(item.fuel);
-    const colourText = item.color_label || colorLabel(item.color);
-    const bodyText = item.body_label || bodyLabel(item);
+    // Same filling as the dry run, so what was proven to be accepted is exactly
+    // what gets submitted.
+    const filled = await fillListing(session, item);
+    result.pre_submit = filled.filled;
+    result.chosen_labels = filled.chosen_labels;
 
-    await openForm(session);
-    if (!(await selectText(session, 'f5', makeText)).ok) throw new Error(`make_option_missing:${makeText}`);
-    await waitForOptions(session, 'f6');
-    const model = await selectText(session, 'f6', modelText);
-    if (!model?.ok) throw new Error(`model:${JSON.stringify(model)}`);
-    const fields = [
-      ['f8', fuelText, 'select'], ['f25', 'Употребяван', 'select'], ['f9', item.power ?? item.horsepower ?? '', 'input'],
-      ['f12', item.price_eur, 'input'], ['f13', item.currency || 'EUR', 'select'], ['f10', gearboxText, 'select'],
-      // f11 must be set before f18: choosing it is what reloads the area list.
-      ['f11', bodyText, 'select'],
-      ['f31', 'Цената е с включено ДДС', 'select'], ['f16', item.mileage, 'input'],
-      ['f14', resolveMonth(item), 'select'], ['f15', item.year, 'select'], ['f17', colourText, 'select'],
-      ['f18', 'Извън страната', 'select'],
-    ];
-    for (const [name, value, kind] of fields) {
-      const ok = kind === 'select' ? (await selectText(session, name, value)).ok : await setValue(session, name, value, kind);
-      if (!ok) throw new Error(`field_missing_or_invalid:${name}`);
-    }
-    await waitForOptions(session, 'f19');
-    if (!(await selectText(session, 'f19', item.country_label || 'Канада')).ok) throw new Error('country_missing');
-    if (!(await setValue(session, 'f21', item.description ?? DEFAULT_DESCRIPTION, 'textarea'))) throw new Error('field_missing:f21');
-    if (!(await setValue(session, 'f22', CONTACT_PHONE, 'input'))) throw new Error('field_missing:f22');
-
-    // Read back the checked fields before submitting. A mismatch means the page
-    // refused a value, and submitting anyway would create a half-filled listing.
-    const readback = await evaluate(session, `(() => {
-      const f = document.forms.namedItem("pub")
-      return {
-        f9: f.elements.f9?.value ?? null, f12: f.elements.f12?.value ?? null, f13: f.elements.f13?.value ?? null,
-        f16: f.elements.f16?.value ?? null, f18: f.elements.f18?.value ?? null, f19: f.elements.f19?.value ?? null,
-        f22: f.elements.f22?.value ?? null,
-      }
-    })()`);
-    result.pre_submit = readback;
-    if (readback.f22 !== CONTACT_PHONE) throw new Error(`pre_submit_mismatch:f22 (${readback.f22})`);
 
     const submitted = await evaluate(session, `(() => {
       const f = document.forms.namedItem("pub")

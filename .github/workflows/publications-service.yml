@@ -20,7 +20,7 @@ on:
         required: true
         default: status
         type: choice
-        options: [status, probe, report, stop, start]
+        options: [status, probe, report, fill, stop, start]
 
 permissions:
   contents: read
@@ -45,6 +45,7 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ secrets.VPS_PORT || 22 }}
           ACTION: ${{ inputs.action }}
+          FILL_DRAFT_ID: ${{ inputs.draft_id }}
         run: |
           ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" "ACTION='$ACTION' bash -s" <<'REMOTE' 2>&1 | sed -E \
             -e 's/vps-[0-9a-f]{6,}/<vps>/g' \
@@ -72,6 +73,9 @@ jobs:
               ;;
             report)
               echo "### Доклад на опашката"
+              ;;
+            fill)
+              echo "### Сухо попълване на формата"
               ;;
           esac
 
@@ -133,6 +137,37 @@ jobs:
             sudo journalctl -u aicc-publications-probe.service -n 80 --no-pager 2>&1 | tail -80
             echo
             printf 'probe резултат: %s\n' "$(systemctl show aicc-publications-probe.service -p Result --value 2>/dev/null)"
+          fi
+
+          if [ "$ACTION" = "fill" ]; then
+            # Dry run against the live Mobile.bg form: fills step one and stops.
+            # It never submits and never attaches photos, so no listing can be
+            # created by this action. Prints the page's own chosen option text.
+            echo
+            echo "### Сухо попълване (без submit, без снимки)"
+            echo "Чернова: $FILL_DRAFT_ID"
+            sudo tee /etc/systemd/system/aicc-publications-fill.service >/dev/null <<FILL
+          [Unit]
+          Description=One-off Publications dry form fill (never submits)
+          After=network-online.target
+
+          [Service]
+          Type=oneshot
+          User=ubuntu
+          WorkingDirectory=/home/ubuntu/auto-import-control-center/services/publications-publisher
+          EnvironmentFile=/etc/aicc-publications.env
+          ExecStart=/usr/bin/env node src/index.mjs fill-test $FILL_DRAFT_ID
+          TimeoutStartSec=600
+          FILL
+            sudo systemctl daemon-reload
+            sudo systemctl reset-failed aicc-publications-fill.service 2>/dev/null || true
+            sudo systemctl start aicc-publications-fill.service || true
+            for _ in $(seq 1 90); do
+              sudo systemctl is-active --quiet aicc-publications-fill.service || break
+              sleep 5
+            done
+            sudo journalctl -u aicc-publications-fill.service -n 200 --no-pager 2>&1 | tail -120
+            printf 'сухо попълване резултат: %s\n' "$(systemctl show aicc-publications-fill.service -p Result --value 2>/dev/null)"
           fi
 
           if [ "$ACTION" = "report" ]; then
