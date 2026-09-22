@@ -1,0 +1,50 @@
+name: Publications profile check
+
+# Read-only. Reports which Browser Use profile holds the saved Mobile.bg session
+# and which cookie domains are in it. Creates nothing, starts no run, opens no
+# browser and bills nothing, so it is safe to run at any time — including before
+# a first login, when it will report that no session exists yet.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install publisher dependencies
+        working-directory: services/publications-publisher
+        run: npm install --no-audit --no-fund
+
+      - name: Check the key is present
+        env:
+          BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
+        run: |
+          if [ -z "$BROWSER_USE_API_KEY" ]; then
+            echo "::error::BROWSER_USE_API_KEY е празна. Добави я като repository secret."
+            exit 1
+          fi
+
+      - name: Read the profiles
+        working-directory: services/publications-publisher
+        env:
+          BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
+          BROWSER_PROFILE_ID: ${{ secrets.BROWSER_PROFILE_ID }}
+          BROWSER_USE_PROFILE: ${{ secrets.BROWSER_USE_PROFILE }}
+        run: node src/profile-check.mjs
+
+      - name: Verdict
+        if: always()
+        run: |
+          echo "### Състояние на Mobile.bg сесията" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "Виж стъпката „Read the profiles“ по-горе." >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

@@ -10,7 +10,8 @@
     "test": "node test/form-steps.test.mjs && npm run test:agent",
     "test:agent": "node test/browser_agent.test.mjs && node test/browser_agent_http.test.mjs && node test/agent_live.test.mjs",
     "onboard": "node src/onboard.mjs",
-    "agent-live": "node src/agent-live.mjs"
+    "agent-live": "node src/agent-live.mjs",
+    "profile-check": "node src/profile-check.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4"

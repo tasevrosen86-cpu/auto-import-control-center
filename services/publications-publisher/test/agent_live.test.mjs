@@ -36,6 +36,11 @@ const api = http.createServer(async (request, response) => {
   let body = '';
   for await (const chunk of request) body += chunk;
 
+  if (request.url === '/api/v4/profiles') {
+    // Every run resolves the Mobile.bg profile first, so the probe cannot start
+    // without this route answering.
+    return json(response, 200, { items: [{ id: 'profile-stub', name: 'mobilebg-publisher' }], totalItems: 1 });
+  }
   if (request.url === '/api/v4/runs' && request.method === 'POST') {
     return json(response, 200, { id: 'run-1', status: 'queued', sessionId: 'sess-1' });
   }

@@ -4,7 +4,7 @@
 
 import http from 'node:http';
 import { chromium } from 'playwright';
-import { createBrowser, stopBrowser } from './browser_use.mjs';
+import { createBrowser, stopBrowser, profileSummary } from './browser_use.mjs';
 import { agentConfigured, startRun, runStatus, queueMessage, sessionInfo, waitForNewRun, cleanTask, taskProblem, MAX_TASK_CHARS } from './browser_agent.mjs';
 
 const host = '127.0.0.1';
@@ -254,6 +254,28 @@ const server = http.createServer(async (request, response) => {
     } catch (error) {
       console.error('Browser Use agent message failed:', error instanceof Error ? error.message : error);
       json(response, 502, { error: error instanceof Error ? error.message : 'Съобщението не бе прието.' });
+    }
+    return;
+  }
+
+  if (path === '/profile') {
+    // Shows whether the saved Mobile.bg session is there without opening a
+    // browser. This is what tells an operator whether another manual login is
+    // needed, instead of guessing from a failed task.
+    try {
+      const summary = await profileSummary();
+      json(response, 200, {
+        profile: summary.name,
+        profile_id: summary.id,
+        exists: summary.exists,
+        mobile_session: summary.mobileSession,
+        cookie_domains: summary.cookieDomains,
+        last_used_at: summary.lastUsedAt,
+        logged_in: summary.mobileSession,
+      });
+    } catch (error) {
+      console.error('Browser Use profile read failed:', error instanceof Error ? error.message : error);
+      json(response, 502, { error: error instanceof Error ? error.message : 'Профилът не беше прочетен.' });
     }
     return;
   }

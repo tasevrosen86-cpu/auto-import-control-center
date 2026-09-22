@@ -34,6 +34,9 @@ function stubApi() {
         response.end(JSON.stringify(payload));
       };
 
+      if (request.url === '/api/v4/profiles' && request.method === 'GET') {
+        return reply(200, { items: [{ id: 'profile-from-name', name: 'mobilebg-publisher' }], totalItems: 1 });
+      }
       if (request.url === '/api/v4/runs' && request.method === 'POST') {
         if (body?.task === 'Дай грешка') {
           return reply(402, { detail: 'Insufficient credits' });
@@ -116,6 +119,23 @@ const second = seen.filter((item) => item.url === '/api/v4/runs' && item.method 
 check('profileId стига до browserSettings', second?.body?.browserSettings?.profileId === '11111111-2222-3333-4444-555555555555');
 check('run без профил пак получава id', withProfile.runId === 'run-1');
 delete process.env.BROWSER_PROFILE_ID;
+
+console.log('\n═══ профилът се подава и когато id липсва (това беше бъгът) ═══');
+delete process.env.BROWSER_PROFILE_ID;
+const noId = await agent.startRun('Трета задача');
+const third = seen.filter((item) => item.url === '/api/v4/runs' && item.method === 'POST').at(-1);
+check('стартира без зададен BROWSER_PROFILE_ID', noId.runId === 'run-1');
+check('профилът е намерен по име', third?.body?.browserSettings?.profileId === 'profile-from-name',
+  `получено: ${JSON.stringify(third?.body?.browserSettings)}`);
+check('заявката пита за профилите', seen.some((item) => item.url === '/api/v4/profiles'));
+// A run with no profile lands on Mobile.bg signed out, which makes the whole
+// task useless, so this is the assertion that keeps the session working.
+check('агентът никога не стартира без профил', Boolean(third?.body?.browserSettings?.profileId));
+const clean = await agent.startRun('Четвърта задача', { useProfile: false });
+const fourth = seen.filter((item) => item.url === '/api/v4/runs' && item.method === 'POST').at(-1);
+check('изрично чист браузър може да се поиска', clean.runId === 'run-1');
+check('при useProfile: false няма профил', fourth?.body?.browserSettings?.profileId === undefined,
+  `получено: ${JSON.stringify(fourth?.body?.browserSettings)}`);
 
 console.log('\n═══ статус: текущ не е терминален ═══');
 const first = await agent.runStatus('run-1');

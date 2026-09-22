@@ -35,6 +35,11 @@ const api = createServer((request, response) => {
       response.writeHead(status, { 'content-type': 'application/json' });
       response.end(JSON.stringify(payload));
     };
+    // The agent resolves the Mobile.bg profile before every run, so the stub has
+    // to answer this the way the live service does.
+    if (request.url === '/api/v4/profiles') {
+      return reply(200, { items: [{ id: 'profile-http', name: 'mobilebg-publisher' }], totalItems: 1 });
+    }
     if (request.url === '/api/v4/runs' && request.method === 'POST') {
       return reply(200, { id: 'run-http-1', status: 'queued', sessionId: 'sess-http-1', eventsUrl: '/e' });
     }
@@ -136,6 +141,10 @@ check('връща run_id', created.payload?.run_id === 'run-http-1');
 check('връща session_id', created.payload?.session_id === 'sess-http-1');
 check('run_id отговаря на този от API', seen.at(-1)?.url === '/api/v4/runs');
 check('задачата е препратена', seen.at(-1)?.body?.task === 'Провери черновата');
+// The session lives in the profile. A run sent without it lands on Mobile.bg
+// signed out, so this is asserted on the wire and not just in the module.
+check('профилът стига до Browser Use', seen.at(-1)?.body?.browserSettings?.profileId === 'profile-http',
+  `получено: ${JSON.stringify(seen.at(-1)?.body?.browserSettings)}`);
 
 console.log('\n═══ статус ═══');
 const status = await post('/agent/status', { run_id: 'run-http-1' });

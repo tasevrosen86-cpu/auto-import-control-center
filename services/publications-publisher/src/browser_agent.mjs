@@ -10,6 +10,12 @@
 // only addresses that leave this module are the run id and the session id,
 // which are handles rather than credentials.
 
+// The profile is resolved by the same code the visible browser uses, so the
+// agent and the manual login can never disagree about which profile holds the
+// Mobile.bg session. `browser_use.mjs` does not import this module, so there is
+// no cycle.
+import { resolveProfile } from './browser_use.mjs';
+
 const API_BASE = process.env.BROWSER_USE_API_BASE || 'https://api.browser-use.com';
 const RUNS_PATH = process.env.BROWSER_USE_RUNS_PATH || '/api/v4/runs';
 const SESSIONS_PATH = process.env.BROWSER_USE_SESSIONS_PATH || '/api/v4/sessions';
@@ -75,14 +81,25 @@ function serviceError(response, body, action) {
 }
 
 // Starts a run and returns immediately with its handles. The browser profile is
-// attached when one is configured, so a task that needs the signed-in Mobile.bg
-// session works the same way the manual browser does.
+// attached so a task that needs the signed-in Mobile.bg session works the same
+// way the visible browser does.
+//
+// The profile is resolved even when `BROWSER_PROFILE_ID` is unset. Leaving it
+// out used to be the bug: the agent then ran in a fresh browser with no cookies,
+// landed on Mobile.bg signed out, and could not find the publish form. The
+// session lives in the profile, so the profile is not optional — it is what
+// makes a run useful at all.
 export async function startRun(task, options = {}) {
   const body = { task };
   if (options.model) body.model = options.model;
 
   const settings = {};
-  const profile = options.profileId || process.env.BROWSER_PROFILE_ID;
+  let profile = options.profileId || process.env.BROWSER_PROFILE_ID;
+  if (!profile && options.useProfile !== false) {
+    // Resolved lazily so a caller that genuinely wants a clean browser can say
+    // so, and so an ordinary run never depends on the id being configured.
+    profile = await resolveProfile();
+  }
   if (profile) settings.profileId = profile;
   if (process.env.BROWSER_USE_PROXY_COUNTRY) settings.proxyCountryCode = process.env.BROWSER_USE_PROXY_COUNTRY;
   if (Object.keys(settings).length) body.browserSettings = settings;
