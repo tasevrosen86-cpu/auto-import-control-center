@@ -85,11 +85,34 @@ if (one.error) console.error(`Грешка от агента: ${one.error}`);
 
 // The second step is the whole point. It asks for something that only exists in
 // the first step's context, so a correct answer proves the session was kept.
+//
+// It must not reuse the first run id. Measured against the live service, polling
+// the old id after a follow-up returns the old run's result instantly — status
+// `completed` in 0 seconds — which looks exactly like a working follow-up and is
+// actually the previous answer being read back. The new run id comes from the
+// session's `latestRunId`, which is the only authoritative source for "which run
+// is the conversation on now".
 console.log('\n─── Задача 2: същата сесия, памет ───');
 const followUp = 'Какво беше заглавието, което току-що прочете? Отговори само с него.';
-await queueMessage(started.sessionId, followUp);
+const queued = await queueMessage(started.sessionId, followUp);
 line('съобщение', followUp);
-const two = await waitForTerminal(started.runId);
+line('run от отговора', queued.runId || '(не е върнат — чакам сесията)');
+
+let followRunId = queued.runId && queued.runId !== started.runId ? queued.runId : '';
+if (followRunId) {
+  line('нов run', followRunId);
+} else {
+  const waited = await waitForNewRun(started.sessionId, started.runId);
+  line('чакане на нов run', `${waited.started ? 'стартира' : 'НЕ стартира'} за ${waited.seconds}s`);
+  followRunId = waited.latestRunId || '';
+  if (!followRunId || followRunId === started.runId) {
+    console.error('\nСлед продължението сесията още сочи към стария run. Спирам, защото всяко четене сега ще върне стария резултат и ще изглежда като успех.');
+    process.exit(1);
+  }
+  line('нов run', followRunId);
+}
+
+const two = await waitForTerminal(followRunId);
 line('краен статус', two.status);
 line('секунди', String(two.seconds));
 console.log('\n─── Резултат от задача 2 ───');
@@ -97,15 +120,20 @@ console.log(two.result ? two.result.trim() : `(няма текст; грешка
 
 // The comparison is the verdict. The guide warns not to trust the agent's prose
 // on its own, so the answer is checked against what step one actually returned.
+// A follow-up that returned in under a second is the stale-read symptom, so it
+// is failed explicitly rather than being allowed to pass on matching text.
 const firstText = (one.result || '').trim().toLowerCase();
 const secondText = (two.result || '').trim().toLowerCase();
 const remembered = Boolean(firstText) && secondText.includes(firstText.replace(/[.!]$/, ''));
+const distinctRun = followRunId !== started.runId;
+const tookTime = two.seconds >= 1;
 
 console.log('\n═══ ПРИСЪДА ═══');
 line('run създаден', 'да');
 line('стигна до терминален статус', String(one.terminal));
 line('резултат върнат', String(Boolean(firstText)));
-line('продължение в същата сесия', String(Boolean(two.result)));
+line('продължението създаде нов run', String(distinctRun));
+line('новото четене не е моментално', String(tookTime));
 line('агентът помни контекста', remembered ? 'да — отговорът съдържа заглавието от стъпка 1' : 'не — отговорът не повтаря стъпка 1');
 
 if (!remembered && firstText && secondText) {
@@ -113,6 +141,6 @@ if (!remembered && firstText && secondText) {
   console.log('Стъпка 2 върна: ' + two.result.trim());
 }
 
-const ok = one.terminal && Boolean(one.result) && !one.timedOut;
+const ok = one.terminal && Boolean(one.result) && !one.timedOut && distinctRun && tookTime;
 console.log(`\n${ok ? 'ВРЪЗКАТА РАБОТИ' : 'ВРЪЗКАТА НЕ ЗАВЪРШИ ЧИСТО'} (цена: ${two.cost ?? one.cost ?? 'неизвестна'} USD)`);
 process.exit(ok ? 0 : 1);

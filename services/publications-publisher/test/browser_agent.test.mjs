@@ -51,7 +51,22 @@ function stubApi() {
           : reply(200, { id: 'run-1', status: 'completed', result: 'Готово: 12 полета.', error: null, sessionId: 'sess-1', totalCostUsd: '0.03' });
       }
       if (request.url === '/api/v4/sessions/sess-1/queue' && request.method === 'POST') {
-        return reply(200, { id: 'msg-1', status: 'pending' });
+        // Measured shape: the reply names the run the message creates. It can be
+        // null while the run is still being set up, so the module must fall back
+        // to the session — this stub returns the id directly.
+        return reply(200, { id: 7, sessionId: 'sess-1', runId: 'run-2', mode: 'queue', status: 'pending', text: body?.text ?? '' });
+      }
+      if (request.url === '/api/v4/sessions/sess-1' && request.method === 'GET') {
+        const asked = seen.filter((item) => item.url === '/api/v4/sessions/sess-1').length;
+        // The first read still points at the old run; the second is the new one.
+        return asked === 1
+          ? reply(200, { sessionId: 'sess-1', latestRunId: 'run-1', status: 'completed' })
+          : reply(200, { sessionId: 'sess-1', latestRunId: 'run-2', status: 'running' });
+      }
+      if (request.url === '/api/v4/sessions/sess-empty' && request.method === 'GET') {
+        // A session that never moves on: the follow-up must not be mistaken for
+        // a new run, and the caller must be told it did not start.
+        return reply(200, { sessionId: 'sess-empty', latestRunId: 'run-1', status: 'completed' });
       }
       return reply(404, { detail: 'Can\'t find ' + request.url });
     });
@@ -118,13 +133,37 @@ const readsAfterTerminal = seen.filter((item) => item.url === '/api/v4/runs/run-
 check('нищо не се чете след терминален статус', readsAfterTerminal === 2, `прочитания: ${readsAfterTerminal}`);
 
 console.log('\n═══ продължаване на разговора ═══');
-await agent.queueMessage('sess-1', 'Продължи');
+const queued = await agent.queueMessage('sess-1', 'Продължи');
 const queue = seen.find((item) => item.url === '/api/v4/sessions/sess-1/queue');
 check('съобщението отива в session queue', queue?.body?.text === 'Продължи');
 check('interrupt не се праща по подразбиране', queue?.body?.interrupt === undefined);
+check('отговорът дава новия run', queued.runId === 'run-2', `получено: ${JSON.stringify(queued.runId)}`);
+check('отговорът дава и id на съобщението', queued.messageId === 7);
 await agent.queueMessage('sess-1', 'Спри', { interrupt: true });
 const interrupt = seen.filter((item) => item.url === '/api/v4/sessions/sess-1/queue').at(-1);
 check('interrupt се праща при поискване', interrupt?.body?.interrupt === true);
+
+// The bug this section exists for: after a follow-up the *previous* run id is
+// still terminal, so polling it returns the old result at once and looks like a
+// working answer. The session is the only place that says which run is current.
+console.log('\n═══ продължението е нов run, не стария ═══');
+const info = await agent.sessionInfo('sess-1');
+check('sessionInfo връща latestRunId', info.latestRunId === 'run-1' || info.latestRunId === 'run-2');
+const newRun = await agent.waitForNewRun('sess-1', 'run-1', { timeoutMs: 8000, intervalMs: 200 });
+check('намира се нов run, различен от стария', newRun.started === true && newRun.latestRunId === 'run-2', JSON.stringify(newRun));
+check('старият run не се брои за нов', newRun.latestRunId !== 'run-1');
+
+// A session that never moves on must be reported as "not started" rather than
+// silently returning the old run, which is exactly the failure that shipped.
+const stuck = await agent.waitForNewRun('sess-empty', 'run-1', { timeoutMs: 1500, intervalMs: 300 });
+check('заседнала сесия се отчита като НЕ стартирала', stuck.started === false, JSON.stringify(stuck));
+check('заседналата сесия сочи към стария run', stuck.latestRunId === 'run-1');
+
+// Start from the old id and prove the two paths differ: the old read is
+// terminal with the old text, the new read is the follow-up.
+const oldRead = await agent.runStatus('run-1');
+check('старият run е терминален (затова е подвеждащ)', oldRead.terminal === true);
+check('новият run id не е старият', newRun.latestRunId !== 'run-1');
 
 console.log('\n═══ грешките не изтичат ключа ═══');
 let creditError = '';

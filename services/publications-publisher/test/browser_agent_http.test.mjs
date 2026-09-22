@@ -41,8 +41,22 @@ const api = createServer((request, response) => {
     if (request.url === '/api/v4/runs/run-http-1') {
       return reply(200, { id: 'run-http-1', status: 'completed', result: 'HTTP резултат', error: null, sessionId: 'sess-http-1' });
     }
+    if (request.url === '/api/v4/runs/run-http-2') {
+      return reply(200, { id: 'run-http-2', status: 'completed', result: 'Отговор от продължението', error: null, sessionId: 'sess-http-1' });
+    }
     if (request.url === '/api/v4/sessions/sess-http-1/queue') {
-      return reply(200, { id: 'msg-1', status: 'pending' });
+      return reply(200, { id: 11, sessionId: 'sess-http-1', runId: 'run-http-2', mode: 'queue', status: 'pending' });
+    }
+    if (request.url === '/api/v4/sessions/sess-http-1') {
+      return reply(200, { sessionId: 'sess-http-1', latestRunId: 'run-http-2', status: 'running' });
+    }
+    if (request.url === '/api/v4/sessions/sess-stuck/queue') {
+      return reply(200, { id: 12, sessionId: 'sess-stuck', runId: null, mode: 'queue', status: 'pending' });
+    }
+    if (request.url === '/api/v4/sessions/sess-stuck') {
+      // Never moves on: the bridge must report started:false, not hand back the
+      // old run id, which would make the site display the old answer.
+      return reply(200, { sessionId: 'sess-stuck', latestRunId: 'run-http-1', status: 'completed' });
     }
     return reply(404, { detail: 'no route ' + request.url });
   });
@@ -129,10 +143,28 @@ check('статусът се връща', status.status === 200);
 check('резултатът се вижда', status.payload?.result === 'HTTP резултат');
 check('статусът е терминален', status.payload?.terminal === true);
 
-console.log('\n═══ продължаване ═══');
-const message = await post('/agent/message', { session_id: 'sess-http-1', text: 'Продължи' });
+console.log('\n═══ продължаване: връща НОВИЯ run ═══');
+const message = await post('/agent/message', { session_id: 'sess-http-1', run_id: 'run-http-1', text: 'Продължи' });
 check('съобщението се приема', message.status === 200 && message.payload?.queued === true);
 check('отива в правилната сесия', seen.at(-1)?.url === '/api/v4/sessions/sess-http-1/queue');
+// The site polled run-http-1 before. If the bridge handed that id back, the very
+// next poll would return the old result and the site would show it as the answer.
+check('връща се новият run, не старият', message.payload?.run_id === 'run-http-2', `получено: ${message.payload?.run_id}`);
+check('отчетено е като стартирало', message.payload?.started === true);
+check('връща се id на съобщението', message.payload?.message_id === 11);
+
+const followStatus = await post('/agent/status', { run_id: message.payload.run_id });
+check('новият run се чете с новия резултат', followStatus.payload?.result === 'Отговор от продължението', JSON.stringify(followStatus.payload?.result));
+
+console.log('\n═══ продължение, което не стартира ═══');
+const stuck = await post('/agent/message', { session_id: 'sess-stuck', run_id: 'run-http-1', text: 'Продължи' });
+check('съобщението е прието', stuck.status === 200);
+check('НЕ се връща старият run', stuck.payload?.run_id !== 'run-http-1', `получено: ${stuck.payload?.run_id}`);
+check('отчетено е като нестартирало', stuck.payload?.started === false);
+
+console.log('\n═══ статус само по session_id ═══');
+const bySession = await post('/agent/status', { session_id: 'sess-http-1' });
+check('статусът може да се пита по сесия', bySession.status === 200 && bySession.payload?.runId === 'run-http-2', JSON.stringify(bySession.payload));
 
 console.log('\n═══ неизвестен път ═══');
 const unknown = await post('/секрет', {});

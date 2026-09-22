@@ -574,8 +574,38 @@ Decisions that are deliberate and should stay:
   is still going reports `null` for both rather than stale text from the last
   poll.
 * **Continuing a conversation uses the session, not the run.** `POST
-  /sessions/{id}/queue` is what carries context forward; the run id alone does
-  not.
+  /sessions/{id}/queue` is what carries context forward. Its reply names the run
+  the message creates, but that field can be null while the run is still being
+  set up, so the bridge falls back to reading the session and waiting until
+  `latestRunId` differs from the run the caller came from.
+* **402 is called out as missing credit.** It is not a wrong key and not a
+  block, and at a distance the three look identical.
+
+### The follow-up bug a real run exposed
+
+A stub cannot catch this. Polling the *previous* run id after a follow-up
+returns that run's result instantly — `completed` in 0 seconds — which looks
+exactly like a working follow-up and is actually the old answer being read back.
+It shipped, and only the live check saw it: step two answered in 0 s with step
+one's text.
+
+Three things were wrong at once, and all three are fixed:
+
+* `queueMessage` discarded the `runId` from the reply and returned the whole
+  body, so callers had nothing correct to poll.
+* The bridge answered `{ queued: true }` with no run id, so the panel kept
+  polling the old one.
+* The panel reused `run.runId` for the follow-up.
+
+Now the reply carries `run_id` and `started`, and `waitForNewRun` is the one
+place that decides whether a new run really exists. A follow-up that does not
+start is reported as such instead of showing the previous answer.
+
+`test/browser_agent.test.mjs` and `test/browser_agent_http.test.mjs` pin this
+down, including a session that never moves on. `src/agent-live.mjs` fails a
+follow-up that returns in under a second, because that is the stale-read
+symptom and matching text alone would let it pass.
+
 * **402 is called out as missing credit.** It is not a wrong key and not a
   block, and at a distance the three look identical.
 
