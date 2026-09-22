@@ -16,7 +16,7 @@
 //
 // Run: node src/agent-live.mjs
 
-import { agentConfigured, startRun, runStatus, queueMessage, cleanTask, MAX_TASK_CHARS } from './browser_agent.mjs';
+import { agentConfigured, startRun, runStatus, queueMessage, sessionInfo, waitForNewRun, cleanTask, MAX_TASK_CHARS } from './browser_agent.mjs';
 
 const POLL_MS = 3000;
 // Generous, because a real browser run really does take minutes. The cap exists

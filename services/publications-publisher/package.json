@@ -7,8 +7,8 @@
   "scripts": {
     "browser-test": "node src/index.mjs browser-test",
     "drain": "node src/index.mjs drain",
-    "test": "node test/form-steps.test.mjs && node test/browser_agent.test.mjs && node test/browser_agent_http.test.mjs",
-    "test:agent": "node test/browser_agent.test.mjs && node test/browser_agent_http.test.mjs",
+    "test": "node test/form-steps.test.mjs && npm run test:agent",
+    "test:agent": "node test/browser_agent.test.mjs && node test/browser_agent_http.test.mjs && node test/agent_live.test.mjs",
     "onboard": "node src/onboard.mjs",
     "agent-live": "node src/agent-live.mjs"
   },
