@@ -166,6 +166,16 @@ const CONTACT_PHONE = process.env.PUBLICATIONS_CONTACT_PHONE || '0887353653';
 // company template is recorded anywhere, so the fallback is kept, not invented.
 const DEFAULT_DESCRIPTION = process.env.PUBLICATIONS_DESCRIPTION || '!!!реална крайна цена!!!';
 
+// A refused select returns every option the page offered, which for BMW is over
+// a hundred entries and buries the rest of the report in the CI log. The full
+// list matters when it is short (it explains the refusal); when it is long, a
+// count and a sample say as much without the noise.
+function trimOptions(outcome) {
+  const options = Array.isArray(outcome?.options) ? outcome.options : null;
+  if (!options || options.length <= 15) return outcome;
+  return { ok: false, error: outcome.error, option_count: options.length, options_sample: options.filter(Boolean).slice(0, 15) };
+}
+
 // Fills step one of the form and reads the values back. It never submits, never
 // touches the file input and never asks for a public URL, so it can be pointed
 // at the real Mobile.bg page to prove that every mapped value is actually
@@ -184,6 +194,7 @@ const DEFAULT_DESCRIPTION = process.env.PUBLICATIONS_DESCRIPTION || '!!!реал
 export async function fillListing(session, item, { strict = true } = {}) {
   const result = { make: item.make, model: item.model, year: item.year, price_eur: item.price_eur };
   const rejected = [];
+  const empty = [];
   const refuse = (field, value, detail) => {
     rejected.push({ field, value, detail });
     if (strict) throw new Error(`${field}:${typeof detail === 'string' ? detail : JSON.stringify(detail)}`);
@@ -191,7 +202,15 @@ export async function fillListing(session, item, { strict = true } = {}) {
   const fill = async (name, value, kind) => {
     const outcome = kind === 'select' ? await selectText(session, name, value) : await setValue(session, name, value, kind);
     const ok = kind === 'select' ? outcome?.ok === true : outcome === true;
-    if (!ok) refuse(name, value, outcome);
+    if (!ok) refuse(name, value, kind === 'select' ? trimOptions(outcome) : outcome);
+    else if (kind !== 'select' && String(value ?? '').trim() === '') {
+      // An empty value is a different thing from a refused one, and the proven
+      // script deliberately left some fields empty (description, and power when
+      // the source had none), so it must not stop a real publish. It is still
+      // worth seeing in a dry run, because an empty required field is exactly how
+      // a listing ends up wrong without anyone noticing.
+      empty.push({ field: name, value });
+    }
     return ok;
   };
 
@@ -201,6 +220,7 @@ export async function fillListing(session, item, { strict = true } = {}) {
     // Every later list belongs to the chosen make, so a refused make makes the
     // rest of the reading meaningless rather than merely incomplete.
     result.rejected = rejected;
+    result.empty = empty;
     result.state = 'failed';
     return result;
   }
@@ -244,6 +264,7 @@ export async function fillListing(session, item, { strict = true } = {}) {
     return { f5: text('f5'), f6: text('f6'), f8: text('f8'), f10: text('f10'), f11: text('f11'), f13: text('f13'), f14: text('f14'), f15: text('f15'), f17: text('f17'), f18: text('f18'), f19: text('f19'), f31: text('f31') }
   })()`);
   result.rejected = rejected;
+  result.empty = empty;
   result.filled = readback;
   result.chosen_labels = chosen;
   if (strict && readback.f22 !== CONTACT_PHONE) throw new Error(`pre_submit_mismatch:f22 (${readback.f22})`);
