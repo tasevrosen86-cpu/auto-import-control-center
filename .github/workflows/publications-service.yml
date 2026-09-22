@@ -20,7 +20,7 @@ on:
         required: true
         default: status
         type: choice
-        options: [status, probe, stop, start]
+        options: [status, probe, report, stop, start]
 
 permissions:
   contents: read
@@ -69,6 +69,9 @@ jobs:
               ;;
             probe)
               echo "### Проверка на браузъра"
+              ;;
+            report)
+              echo "### Доклад на опашката"
               ;;
           esac
 
@@ -130,6 +133,31 @@ jobs:
             sudo journalctl -u aicc-publications-probe.service -n 80 --no-pager 2>&1 | tail -80
             echo
             printf 'probe резултат: %s\n' "$(systemctl show aicc-publications-probe.service -p Result --value 2>/dev/null)"
+          fi
+
+          if [ "$ACTION" = "report" ]; then
+            # Read-only: counts and statuses only, so it is safe to run at any
+            # time and tells us which gate the chain stops at.
+            echo
+            echo "### Доклад на изолираните publication_* таблици"
+            sudo tee /etc/systemd/system/aicc-publications-report.service >/dev/null <<'REPORT'
+          [Unit]
+          Description=One-off Publications queue report (read-only)
+          After=network-online.target
+
+          [Service]
+          Type=oneshot
+          User=ubuntu
+          WorkingDirectory=/home/ubuntu/auto-import-control-center/services/publications-publisher
+          EnvironmentFile=/etc/aicc-publications.env
+          ExecStart=/usr/bin/env node src/queue-report.mjs
+          TimeoutStartSec=120
+          REPORT
+            sudo systemctl daemon-reload
+            sudo systemctl reset-failed aicc-publications-report.service 2>/dev/null || true
+            sudo systemctl start aicc-publications-report.service || true
+            sudo journalctl -u aicc-publications-report.service -n 200 --no-pager 2>&1 | tail -120
+            printf 'доклад резултат: %s\n' "$(systemctl show aicc-publications-report.service -p Result --value 2>/dev/null)"
           fi
 
           echo
