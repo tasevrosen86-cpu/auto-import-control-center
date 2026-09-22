@@ -615,8 +615,28 @@ be run for real in a test.
 * **402 is called out as missing credit.** It is not a wrong key and not a
   block, and at a distance the three look identical.
 * **Credentials for a task that needs the signed-in Mobile.bg session come from
-  the browser profile** (`BROWSER_PROFILE_ID`), not from the prompt. Passwords
-  are never put into a task.
+  the browser profile**, not from the prompt. Passwords are never put into a
+  task. The profile is a *name* (`BROWSER_USE_PROFILE`, default
+  `mobilebg-publisher`); `BROWSER_PROFILE_ID` is an optional shortcut.
+* **The agent always runs inside that profile.** `startRun` resolves it through
+  the same `resolveProfile` the visible browser uses, so the two cannot disagree
+  about where the session lives. An unset `BROWSER_PROFILE_ID` means "find it by
+  name", never "start with no profile" — a run without a profile opens a browser
+  with no cookies, lands on Mobile.bg signed out and cannot find the form, which
+  makes the task useless. `startRun(task, { useProfile: false })` asks for a
+  genuinely clean browser and is the only way to get one.
+* **A stored cookie is not a live session.** `GET /publications-browser/profile`
+  reports which profile the agent will use and whether a `mobile.bg` cookie is in
+  it. Mobile.bg expires sessions, and an expired cookie still shows up there, so
+  `mobile_cookies: true` does not mean logged in. `POST
+  /publications-browser/profile/verify` opens a browser on the publish page and
+  checks for the form; that is the honest answer. Both sit behind the signed
+  Admin ticket, and `npm run profile-check` in
+  `services/publications-publisher` plus the `Publications profile check`
+  workflow read the same thing from CI without opening anything.
+* **A signed-out task and a wrong-profile task look identical from the outside**
+  — both end with "no form". The bridge logs the profile id each run used so the
+  two can be told apart.
 
 Tests (no secrets, no network — they start their own stub API):
 

@@ -4,7 +4,7 @@
 
 import http from 'node:http';
 import { chromium } from 'playwright';
-import { createBrowser, stopBrowser, profileSummary } from './browser_use.mjs';
+import { createBrowser, stopBrowser, profileSummary, resolveProfile, profileId, profileName } from './browser_use.mjs';
 import { agentConfigured, startRun, runStatus, queueMessage, sessionInfo, waitForNewRun, cleanTask, taskProblem, MAX_TASK_CHARS } from './browser_agent.mjs';
 
 const host = '127.0.0.1';
@@ -197,6 +197,10 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       const run = await startRun(task);
+      // Which profile a run used is the difference between "the session
+      // expired" and "the wrong profile was loaded", and those look the same
+      // from the task result. The id is an address, not a credential.
+      console.log(`Browser Use agent run ${run.runId} started on profile ${profileId() || profileName()}.`);
       json(response, 200, {
         run_id: run.runId,
         session_id: run.sessionId,
@@ -259,23 +263,54 @@ const server = http.createServer(async (request, response) => {
   }
 
   if (path === '/profile') {
-    // Shows whether the saved Mobile.bg session is there without opening a
-    // browser. This is what tells an operator whether another manual login is
-    // needed, instead of guessing from a failed task.
+    // Reports which profile the agent will use and whether a Mobile.bg cookie is
+    // stored in it. A stored cookie is *not* proof of a working login: Mobile.bg
+    // expires sessions, and an expired cookie still counts as a domain here. So
+    // this says `mobile_cookies`, not `logged_in`, and `POST /profile/verify`
+    // is the one that actually looks at the publish form.
     try {
       const summary = await profileSummary();
       json(response, 200, {
         profile: summary.name,
         profile_id: summary.id,
         exists: summary.exists,
-        mobile_session: summary.mobileSession,
+        mobile_cookies: summary.mobileSession,
         cookie_domains: summary.cookieDomains,
         last_used_at: summary.lastUsedAt,
-        logged_in: summary.mobileSession,
       });
     } catch (error) {
       console.error('Browser Use profile read failed:', error instanceof Error ? error.message : error);
       json(response, 502, { error: error instanceof Error ? error.message : 'Профилът не беше прочетен.' });
+    }
+    return;
+  }
+
+  if (path === '/profile/verify') {
+    // Opens a browser attached to the profile, loads the publish page and checks
+    // for the publication form. This is the only honest answer to "am I still
+    // logged in", because it looks at the page rather than at cookie metadata.
+    // It opens a real browser, so it is a deliberate request and not part of the
+    // read-only /profile.
+    try {
+      const created = await createBrowser();
+      const result = { logged_in: false, profile_id: await resolveProfile() };
+      try {
+        const browser = await chromium.connectOverCDP(created.cdpUrl);
+        const context = browser.contexts()[0] || await browser.newContext();
+        const page = context.pages()[0] || await context.newPage();
+        await page.goto(entryUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+        result.logged_in = await loggedIn(page);
+        // The profile is only written back on a clean close, so the browser is
+        // closed rather than left running: otherwise the check itself could
+        // discard a session it was asked to confirm.
+        await browser.close();
+      } finally {
+        await stopBrowser(created.id).catch(() => undefined);
+      }
+      json(response, 200, result);
+    } catch (error) {
+      console.error('Browser Use session verify failed:', error instanceof Error ? error.message : error);
+      json(response, 502, { error: error instanceof Error ? error.message : 'Сесията не беше проверена.' });
     }
     return;
   }
