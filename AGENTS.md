@@ -606,12 +606,17 @@ down, including a session that never moves on. `src/agent-live.mjs` fails a
 follow-up that returns in under a second, because that is the stale-read
 symptom and matching text alone would let it pass.
 
+`test/agent_live.test.mjs` runs that probe as its own process against a stub, so
+every line of it executes in CI. It exists because the probe was the only part
+with no test, and a missing import reached a paid live run as a result. When a
+script talks to a real service, `BROWSER_USE_API_BASE` is the seam that lets it
+be run for real in a test.
+
 * **402 is called out as missing credit.** It is not a wrong key and not a
   block, and at a distance the three look identical.
-
-Credentials for a task that needs the signed-in Mobile.bg session come from the
-browser profile (`BROWSER_PROFILE_ID`), not from the prompt. Passwords are never
-put into a task.
+* **Credentials for a task that needs the signed-in Mobile.bg session come from
+  the browser profile** (`BROWSER_PROFILE_ID`), not from the prompt. Passwords
+  are never put into a task.
 
 Tests (no secrets, no network — they start their own stub API):
 
