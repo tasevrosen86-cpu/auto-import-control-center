@@ -17,6 +17,15 @@
        form: the earlier code read it immediately and found nothing. -->
   <label>Модел <select name="f6"><option value="">-</option></select></label>
 
+  <!-- f11 is «Категория», the body style. Choosing it reloads the area and
+       country lists, so it has to be set before them: filling it afterwards
+       would wipe them. This is what makes a wrong fill order visible. -->
+  <label>Категория <select name="f11">
+    <option value="">-</option>
+    <option>Джип</option><option>Пикап</option><option>Седан</option><option>Купе</option>
+    <option>Миниван</option><option>Хечбек</option><option>Кабрио</option><option>Комби</option><option>Ван</option>
+  </select></label>
+
   <label>Гориво <select name="f8"><option value="">-</option><option>Бензинов</option><option>Дизелов</option><option>Хибриден</option></select></label>
   <label>Състояние <select name="f25"><option value="">-</option><option>Употребяван</option><option>Нов</option></select></label>
   <label>Мощност <input name="f9"></label>
@@ -63,6 +72,22 @@ form.elements.f5.addEventListener('change', (event) => {
       const option = document.createElement('option');
       option.textContent = model;
       list.appendChild(option);
+    }
+  }, 1200);
+});
+form.elements.f11?.addEventListener('change', () => {
+  // «Категория» resets and then repopulates the dependent lists, exactly like the
+  // real form: the area options arrive asynchronously after the choice. Filling
+  // f11 after f18 would therefore lose the area, which is what this exposes.
+  const areas = form.elements.f18;
+  areas.innerHTML = '<option value="">-</option>';
+  const f19 = form.elements.f19;
+  if (f19) f19.innerHTML = '<option value="">-</option>';
+  setTimeout(() => {
+    for (const area of ['Извън страната', 'Варна']) {
+      const option = document.createElement('option');
+      option.textContent = area;
+      areas.appendChild(option);
     }
   }, 1200);
 });

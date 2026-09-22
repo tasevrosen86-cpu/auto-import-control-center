@@ -28,9 +28,15 @@ const MOBILE_BG_MAX_PHOTOS = 17;
 const FIELD_SELECTORS: Record<string, string> = {
   make: '[name="f5"]', model: '[name="f6"]', modification: '[name="f7"]', fuel: '[name="f8"]',
   condition: '[name="f25"]', power: '[name="f9"]', euro_standard: '[name="f29"]', gearbox: '[name="f10"]',
-  displacement: '[name="f30"]', price: '[name="f12"]', currency: '[name="f13"]', vat_included: '[name="f31"]',
+  displacement: '[name="f30"]',
+  // f11 is «Категория». Choosing it reloads the area and country lists below, so
+  // it has to be filled before them: set afterwards it wipes both. It sits after
+  // the model so the order mirrors the proven script and the other two paths.
+  body: '[name="f11"]',
+  price: '[name="f12"]', currency: '[name="f13"]', vat_included: '[name="f31"]',
   mileage: '[name="f16"]', month: '[name="f14"]', year: '[name="f15"]',
-  color: '[name="f17"]', location: '[name="f18"]', country: '[name="f19"]', vin: '[name="f32"]',
+  color: '[name="f17"]',
+  location: '[name="f18"]', country: '[name="f19"]', vin: '[name="f32"]',
 };
 
 // Mobile.bg splits the origin in two: f18 is the market area and f19 is the
@@ -54,6 +60,15 @@ const STRICT_FIELDS = (process.env.MOBILE_BG_STRICT_FIELDS
   .split(',').map(key => key.trim()).filter(Boolean);
 const VALUE_ALIASES: Record<string, Record<string, string>> = {
   fuel: { Бензин: 'Бензинов', Дизел: 'Дизелов', Хибрид: 'Хибриден', 'Газ (LPG)': 'Газ' },
+  // The intake worker sends the internal vocabulary. Both spellings are accepted
+  // so a draft that already carries Mobile.bg's own wording also works. The field
+  // stays optional: a catalog row has no body style, and the broker can set it.
+  body: {
+    van: 'Ван', large_suv: 'Джип', small_suv: 'Джип', pickup: 'Пикап', coupe: 'Купе',
+    convertible: 'Кабрио', wagon: 'Комби', hatchback: 'Хечбек', sedan: 'Седан', other: 'Други',
+    Ван: 'Ван', Джип: 'Джип', Пикап: 'Пикап', Купе: 'Купе', Кабрио: 'Кабрио',
+    Комби: 'Комби', Хечбек: 'Хечбек', Седан: 'Седан', Други: 'Други',
+  },
   condition: { Използван: 'Употребяван' },
   euro_standard: Object.fromEntries([1, 2, 3, 4, 5, 6].map(n => [`Euro ${n}`, `Евро ${n}`])),
   month: Object.fromEntries(['Януари','Февруари','Март','Април','Май','Юни','Юли','Август','Септември','Октомври','Ноември','Декември'].map(v => [v, v.toLocaleLowerCase('bg')])),

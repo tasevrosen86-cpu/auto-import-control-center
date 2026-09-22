@@ -19,6 +19,7 @@ type IncomingField = {
 
 const fieldMeta: Record<string, { label: string; dbKey: string; fieldType: string }> = {
   category: { label: 'Категория', dbKey: 'category', fieldType: 'select' },
+  body: { label: 'Каросерия', dbKey: 'body_type', fieldType: 'select' },
   make: { label: 'Марка', dbKey: 'make', fieldType: 'select' },
   model: { label: 'Модел', dbKey: 'model', fieldType: 'select' },
   modification: { label: 'Модификация', dbKey: 'modification', fieldType: 'text' },
@@ -74,7 +75,7 @@ const fieldMeta: Record<string, { label: string; dbKey: string; fieldType: strin
 const MOBILE_BG_MAX_PHOTOS = 17;
 
 const requiredForReview = [
-  'category', 'make', 'model', 'year', 'mileage', 'fuel', 'gearbox', 'color',
+  'category', 'make', 'model', 'year', 'mileage', 'fuel', 'gearbox',
   'condition', 'drivetrain', 'price', 'currency', 'location', 'seller_name',
   'phone', 'ad_type',
 ];

@@ -196,6 +196,10 @@ export async function publishOne(session, item) {
       ['f18', 'Извън страната', 'select'],
     ];
     for (const [name, value, kind] of fields) {
+      // Colour is an optional control: an unknown colour arrives empty and the
+      // form accepts the listing without it. Every other field here is required,
+      // so a refusal still stops the row.
+      if (name === 'f17' && !String(value || '').trim()) continue;
       const ok = kind === 'select' ? (await selectText(session, name, value)).ok : await setValue(session, name, value, kind);
       if (!ok) throw new Error(`field_missing_or_invalid:${name}`);
     }

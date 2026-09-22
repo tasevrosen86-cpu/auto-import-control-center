@@ -28,7 +28,10 @@ export function preflight(draft) {
     failures.push({ code: 'blocked_price_missing', message: 'Въведи крайната цена за Mobile.bg в EUR.' });
   }
 
-  for (const field of ['make', 'model', 'year', 'mileage', 'body', 'fuel', 'transmission', 'color']) {
+  // Colour is optional on Mobile.bg and the extraction reports an unknown colour
+  // as absent rather than guessing, so it must not stop the listing. The
+  // required set is the data Mobile.bg truly needs to accept the ad.
+  for (const field of ['make', 'model', 'year', 'mileage', 'body', 'fuel', 'transmission']) {
     const value = draft?.[field];
     if (value === null || value === undefined || value === '') {
       failures.push({ code: 'blocked_missing_data', message: `Липсва потвърдена стойност за «${field}».` });

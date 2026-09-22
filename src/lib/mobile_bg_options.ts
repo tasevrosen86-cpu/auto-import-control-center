@@ -8,6 +8,9 @@ export const MONTHS_BG = ['Януари', 'Февруари', 'Март', 'Ап�
 export const MOBILE_BG_SELECTORS: Record<string, string> = {
   make: 'f5', model: 'f6', modification: 'f7', fuel: 'f8', condition: 'f25',
   power: 'f9', euro_standard: 'f29', gearbox: 'f10', displacement: 'f30',
+  // f11 is «Категория». Choosing it reloads the area and country lists, so it
+  // must sit before location/country: set afterwards it wipes them.
+  body: 'f11',
   price: 'f12', currency: 'f13', vat_included: 'f31', mileage: 'f16',
   month: 'f14', year: 'f15', color: 'f17', location: 'f18', country: 'f19', vin: 'f32',
 };
@@ -38,6 +41,15 @@ export const COUNTRY_CANDIDATES: Array<[string, string[]]> = [
 // Cloudflare interstitial before reaching a single field.
 export const VALUE_ALIASES: Record<string, Record<string, string>> = {
   fuel: { Бензин: 'Бензинов', Дизел: 'Дизелов', Хибрид: 'Хибриден', 'Газ (LPG)': 'Газ' },
+  // The intake worker sends the internal vocabulary, which is what BODY_LABELS
+  // in the publisher uses. Both spellings are translated so a manual draft that
+  // already carries Mobile.bg's wording also works.
+  body: {
+    van: 'Ван', large_suv: 'Джип', small_suv: 'Джип', pickup: 'Пикап', coupe: 'Купе',
+    convertible: 'Кабрио', wagon: 'Комби', hatchback: 'Хечбек', sedan: 'Седан', other: 'Други',
+    Ван: 'Ван', Джип: 'Джип', Пикап: 'Пикап', Купе: 'Купе', Кабрио: 'Кабрио',
+    Комби: 'Комби', Хечбек: 'Хечбек', Седан: 'Седан', Други: 'Други',
+  },
   condition: { Използван: 'Употребяван' },
   euro_standard: Object.fromEntries([1, 2, 3, 4, 5, 6].map(n => [`Euro ${n}`, `Евро ${n}`])),
   month: Object.fromEntries(MONTHS_BG.map(value => [value, value.toLocaleLowerCase('bg')])),

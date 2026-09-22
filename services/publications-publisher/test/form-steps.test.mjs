@@ -130,6 +130,21 @@ async function run() {
   check('липсващо описание → fallback текстът',
     fallbackFields.get('f21') === '!!!реална крайна цена!!!', JSON.stringify(fallbackFields.get('f21')));
 
+  // Third run with the colour absent, which is what the extraction now sends for
+  // a colour it does not recognise ("and Upholstery"). The listing must still
+  // reach step 1 instead of stopping on an unusable colour.
+  posted = '';
+  const noColour = { ...item, color: '' };
+  const colourResult = await publish(session, noColour);
+  const colourFields = new URLSearchParams(posted);
+  check('непознат цвят не спира публикацията (стига до стъпка 1)',
+    /step2_not_reached/.test(colourResult.message || ''), colourResult.message);
+  check('непознат цвят не се записва като стойност',
+    (colourFields.get('f17') || '') === '', JSON.stringify(colourFields.get('f17')));
+  check('останалите полета влизат въпреки липсващия цвят',
+    colourFields.get('f5') === 'Toyota' && colourFields.get('f19') === 'Канада' && colourFields.get('f11') === 'Джип',
+    JSON.stringify({ f5: colourFields.get('f5'), f11: colourFields.get('f11'), f19: colourFields.get('f19') }));
+
   console.log('');
   check('стъпка 1 е изпратена (стъбът няма стъпка 2, спира там)',
     /step2_not_reached/.test(result.message || ''), result.message);

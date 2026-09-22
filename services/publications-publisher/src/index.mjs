@@ -5,6 +5,7 @@ import { createClient } from '@supabase/supabase-js';
 import { openSession, describeTransport } from './session.mjs';
 import { inspectForm, publishOne, openForm, ensureLoggedIn } from './form.mjs';
 import { preflight } from './preflight.mjs';
+import { BODY_LABELS } from './mappings.mjs';
 
 // Browser diagnostics must not need database credentials. The database client is
 // intentionally created only when the private queue worker can authenticate.
@@ -26,7 +27,15 @@ function num(v){const x=String(v||'').replace(/[^0-9]/g,'');return x?Number(x):n
 function fuel(v){const s=String(v).toLowerCase();return s.includes('диз')||s.includes('diesel')?'diesel':s.includes('хиб')||s.includes('hybrid')?'hybrid':s.includes('елект')||s.includes('electric')?'electric':s.includes('бенз')||s.includes('gas')||s.includes('petrol')?'petrol':'';}
 function gearbox(v){const s=String(v).toLowerCase();return s.includes('полу')||s.includes('semi')?'semi-automatic':s.includes('авто')||s.includes('automatic')?'automatic':s.includes('ръч')||s.includes('manual')?'manual':'';}
 function color(v){const s=String(v).toLowerCase();const x=[['сив','grey'],['gray','grey'],['чер','black'],['black','black'],['бял','white'],['white','white'],['среб','silver'],['silver','silver'],['син','blue'],['blue','blue'],['черв','red'],['red','red'],['каф','brown'],['brown','brown'],['зелен','green'],['green','green']].find(([a])=>s.includes(a));return x?.[1]||'';}
-function body(v){const s=String(v).toLowerCase();if(s.includes('седан')||s.includes('sedan'))return'sedan';if(s.includes('комби')||s.includes('wagon'))return'wagon';if(s.includes('купе')||s.includes('coupe'))return'coupe';if(s.includes('хеч')||s.includes('hatch'))return'hatchback';if(s.includes('пикап')||s.includes('pickup'))return'pickup';return'large_suv';}
+// The draft carries the internal vocabulary that BODY_LABELS already uses, so a
+// known key is passed through untouched: the old version re-translated them and
+// turned «van», «convertible» and «other» into «Джип». Mobile.bg's own wording is
+// translated too, for a manual draft. An unrecognised style keeps the previous
+// default rather than returning empty: preflight requires a body style, so empty
+// would block the listing before the browser opens.
+// Exported so the label mapping can be exercised without a browser: the round
+// trip from a draft value to Mobile.bg's option wording is what decides «Категория».
+export function body(v){const s=String(v||'').toLowerCase().trim();if(BODY_LABELS[s])return s;if(s.includes('кабрио')||s.includes('convertible')||s.includes('cabriolet'))return'convertible';if(s.includes('пикап')||s.includes('pickup')||s.includes('pick-up')||s.includes('truck'))return'pickup';if(s.includes('хечбек')||s.includes('hatchback')||s.includes('хеч')||s.includes('hatch'))return'hatchback';if(s.includes('комби')||s.includes('wagon')||s.includes('estate'))return'wagon';if(s.includes('купе')||s.includes('coupe'))return'coupe';if(s.includes('седан')||s.includes('sedan')||s.includes('saloon'))return'sedan';if(s.includes('ван')||s.includes('van')||s.includes('minivan'))return'van';return'large_suv';}
 
 async function payload(job){
  const [{data:draft,error:de},{data:fields,error:fe},{data:images,error:ie}]=await Promise.all([
