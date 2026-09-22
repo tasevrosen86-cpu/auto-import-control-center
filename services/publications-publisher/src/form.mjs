@@ -169,41 +169,62 @@ const DEFAULT_DESCRIPTION = process.env.PUBLICATIONS_DESCRIPTION || '!!!реал
 // Fills step one of the form and reads the values back. It never submits, never
 // touches the file input and never asks for a public URL, so it can be pointed
 // at the real Mobile.bg page to prove that every mapped value is actually
-// accepted — a real submit is not required to answer that question, and
-// answering it before submitting is what keeps a dry run from creating a
-// half-filled listing. `publishOne` below does the submitting, and it calls this
-// so the two can never fill the form differently.
-export async function fillListing(session, item) {
+// accepted — a real submit is not needed to answer that question, and answering
+// it before submitting is what keeps one bad mapping from creating a half-filled
+// listing. `publishOne` below does the submitting, and it calls this so the two
+// can never fill the form differently.
+//
+// `strict` is the whole difference between the two callers. A real publish stops
+// at the first refusal, because submitting a form with a silently missing value
+// is worse than not submitting at all. A dry run wants the opposite: it collects
+// every refusal in one pass and returns them together, so the complete set of bad
+// mappings is visible after a single run instead of one per run. When a select is
+// refused, the page's own option list comes back with it, and that is what makes
+// the answer actionable rather than a bare "option_missing".
+export async function fillListing(session, item, { strict = true } = {}) {
   const result = { make: item.make, model: item.model, year: item.year, price_eur: item.price_eur };
-  const makeText = makeLabel(item.make);
-  const modelText = modelLabel(item.make, item.model);
-  const gearboxText = item.gearbox_label || transmissionLabel(item.transmission);
-  const fuelText = item.fuel_label || fuelLabel(item.fuel);
-  const colourText = item.color_label || colorLabel(item.color);
-  const bodyText = item.body_label || bodyLabel(item);
+  const rejected = [];
+  const refuse = (field, value, detail) => {
+    rejected.push({ field, value, detail });
+    if (strict) throw new Error(`${field}:${typeof detail === 'string' ? detail : JSON.stringify(detail)}`);
+  };
+  const fill = async (name, value, kind) => {
+    const outcome = kind === 'select' ? await selectText(session, name, value) : await setValue(session, name, value, kind);
+    const ok = kind === 'select' ? outcome?.ok === true : outcome === true;
+    if (!ok) refuse(name, value, outcome);
+    return ok;
+  };
 
   await openForm(session);
-  if (!(await selectText(session, 'f5', makeText)).ok) throw new Error(`make_option_missing:${makeText}`);
+  const makeText = makeLabel(item.make);
+  if (!(await fill('f5', makeText, 'select'))) {
+    // Every later list belongs to the chosen make, so a refused make makes the
+    // rest of the reading meaningless rather than merely incomplete.
+    result.rejected = rejected;
+    result.state = 'failed';
+    return result;
+  }
   await waitForOptions(session, 'f6');
-  const model = await selectText(session, 'f6', modelText);
-  if (!model?.ok) throw new Error(`model:${JSON.stringify(model)}`);
+  await fill('f6', modelLabel(item.make, item.model), 'select');
+
   const fields = [
-    ['f8', fuelText, 'select'], ['f25', 'Употребяван', 'select'], ['f9', item.power ?? item.horsepower ?? '', 'input'],
-    ['f12', item.price_eur, 'input'], ['f13', item.currency || 'EUR', 'select'], ['f10', gearboxText, 'select'],
+    ['f8', item.fuel_label || fuelLabel(item.fuel), 'select'], ['f25', 'Употребяван', 'select'],
+    ['f9', item.power ?? item.horsepower ?? '', 'input'],
+    ['f12', item.price_eur, 'input'], ['f13', item.currency || 'EUR', 'select'],
+    ['f10', item.gearbox_label || transmissionLabel(item.transmission), 'select'],
     // f11 must be set before f18: choosing it is what reloads the area list.
-    ['f11', bodyText, 'select'],
+    ['f11', item.body_label || bodyLabel(item), 'select'],
     ['f31', 'Цената е с включено ДДС', 'select'], ['f16', item.mileage, 'input'],
-    ['f14', resolveMonth(item), 'select'], ['f15', item.year, 'select'], ['f17', colourText, 'select'],
+    ['f14', resolveMonth(item), 'select'], ['f15', item.year, 'select'],
+    ['f17', item.color_label || colorLabel(item.color), 'select'],
     ['f18', 'Извън страната', 'select'],
   ];
-  for (const [name, value, kind] of fields) {
-    const ok = kind === 'select' ? (await selectText(session, name, value)).ok : await setValue(session, name, value, kind);
-    if (!ok) throw new Error(`field_missing_or_invalid:${name}`);
-  }
+  for (const [name, value, kind] of fields) await fill(name, value, kind);
+
   await waitForOptions(session, 'f19');
-  if (!(await selectText(session, 'f19', item.country_label || 'Канада')).ok) throw new Error('country_missing');
-  if (!(await setValue(session, 'f21', item.description ?? DEFAULT_DESCRIPTION, 'textarea'))) throw new Error('field_missing:f21');
-  if (!(await setValue(session, 'f22', CONTACT_PHONE, 'input'))) throw new Error('field_missing:f22');
+  await fill('f19', item.country_label || 'Канада', 'select');
+  await fill('f21', item.description ?? DEFAULT_DESCRIPTION, 'textarea');
+  await fill('f22', CONTACT_PHONE, 'input');
 
   // Read back the filled fields. A mismatch means the page refused a value, and
   // reporting it here is the whole point of a dry run.
@@ -222,10 +243,11 @@ export async function fillListing(session, item) {
     const text = (name) => { const e = f.elements[name]; return e?.selectedOptions?.[0]?.text?.trim() ?? null }
     return { f5: text('f5'), f6: text('f6'), f8: text('f8'), f10: text('f10'), f11: text('f11'), f13: text('f13'), f14: text('f14'), f15: text('f15'), f17: text('f17'), f18: text('f18'), f19: text('f19'), f31: text('f31') }
   })()`);
+  result.rejected = rejected;
   result.filled = readback;
   result.chosen_labels = chosen;
-  if (readback.f22 !== CONTACT_PHONE) throw new Error(`pre_submit_mismatch:f22 (${readback.f22})`);
-  result.state = 'filled';
+  if (strict && readback.f22 !== CONTACT_PHONE) throw new Error(`pre_submit_mismatch:f22 (${readback.f22})`);
+  result.state = rejected.length ? 'failed' : 'filled';
   return result;
 }
 

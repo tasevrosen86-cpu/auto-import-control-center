@@ -79,8 +79,15 @@ export async function fillTest(draftId){
   const login=await ensureLoggedIn(session);
   const form=await inspectForm(session);
   if(login.state!=='already_logged_in'||!form.form_found) return {verdict:'NO_SESSION',login_state:login.state,form:form.verdict,transport:describeTransport()};
-  const filled=await fillListing(session,item);
-  return {verdict:'FILLED',draft_id:draftId,transport:describeTransport(),preflight:check,login_state:login.state,...filled};
+  // Non-strict on purpose: a dry run should return every refused field in one
+  // pass, not stop at the first one and hide the rest.
+  const filled=await fillListing(session,item,{strict:false});
+  return {
+    verdict:filled.state==='filled'?'FILLED':'FILL_FAILED',
+    draft_id:draftId,transport:describeTransport(),preflight:check,login_state:login.state,
+    draft_values:{make:item.make,model:item.model,year:item.year,mileage:item.mileage,fuel:item.fuel,transmission:item.transmission,body:item.body,color:item.color,power:item.power,country_label:item.country_label,month:item.month,price_eur:item.price_eur},
+    rejected:filled.rejected,chosen_labels:filled.chosen_labels,filled:filled.filled,
+  };
  }catch(error){
   return {verdict:'FILL_FAILED',draft_id:draftId,error:String(error),transport:describeTransport()};
  }finally{await session.close().catch(()=>undefined);}
