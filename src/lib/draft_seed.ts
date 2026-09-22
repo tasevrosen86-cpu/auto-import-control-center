@@ -45,6 +45,25 @@ function normaliseEuro(value: string): string {
   return match ? `Euro ${match[1].toLowerCase()}` : text;
 }
 
+// f11 is «Категория», and its list is the body style. The catalog stores it as
+// «configuration» in its own wording («Голям 7-местен SUV»), while the URL
+// importer sends the internal vocabulary. Both are resolved here so the two
+// flows reach the publisher as the same field, and an unknown style stays empty
+// rather than guessing a category.
+function normaliseBody(value: string): string {
+  const source = value.trim().toLowerCase();
+  if (!source) return '';
+  if (source.includes('кабрио') || source.includes('convertible') || source.includes('cabriolet')) return 'convertible';
+  if (source.includes('пикап') || source.includes('pickup') || source.includes('pick-up') || source.includes('truck')) return 'pickup';
+  if (source.includes('хечбек') || source.includes('hatchback') || source.includes('hatch')) return 'hatchback';
+  if (source.includes('комби') || source.includes('wagon') || source.includes('estate') || source.includes('avant')) return 'wagon';
+  if (source.includes('купе') || source.includes('coupe')) return 'coupe';
+  if (source.includes('седан') || source.includes('sedan') || source.includes('saloon')) return 'sedan';
+  if (source.includes('ван') || source.includes('van')) return 'van';
+  if (source.includes('suv') || source.includes('джип') || source.includes('crossover') || source.includes('sport utility') || source.includes('utility vehicle')) return 'large_suv';
+  return '';
+}
+
 function imageSeed(raw: Record<string, unknown>) {
   const urls = new Set<string>();
   const keys = new Set(['image','images','photo','photos','imageUrl','imageUrls','photoUrl','photoUrls','contentUrl','original','large']);
@@ -119,6 +138,11 @@ export function createDraftSeed(vehicle: Vehicle, marketplaces: VehicleMarketpla
     euro_standard: normaliseEuro(firstRaw(raw, ['euro_standard', 'euroStandard', 'emissionClass', 'emissions', 'euro']) || detail.euro),
     color: firstRaw(raw, ['color', 'vehicleColor', 'exteriorColor', 'bodyColor', 'colour']) || detail.color,
     condition: 'Използван',
+    // The catalog path carries the body style in `configuration`; the URL import
+    // path already normalised it into raw_json. Both land here as `body`, the
+    // key f11 is selected by, so the red Korea and blue Canada buttons need no
+    // extra page opened and no listing link.
+    body: normaliseBody(source?.configuration || firstRaw(raw, ['body_type', 'bodyType', 'body_style', 'bodyStyle', 'configuration', 'vehicleConfiguration', 'body'])),
     drivetrain: asText(raw.drivetrain),
     vin: asText(source?.vin ?? raw.vin),
     generation: asText(raw.generation),
@@ -139,7 +163,7 @@ export function createDraftSeed(vehicle: Vehicle, marketplaces: VehicleMarketpla
   };
 
   const fieldSources: Record<string, string> = Object.fromEntries(
-    Object.keys(fields).map(key => [key, ['category', 'make', 'model', 'year', 'fuel'].includes(key) ? 'catalog' : (Object.prototype.hasOwnProperty.call(ROYAL_CARS_PUBLISH_DEFAULTS, key) || ['description', 'final_description'].includes(key) ? 'company_profile' : sourceKind)]),
+    Object.keys(fields).map(key => [key, ['category', 'make', 'model', 'year', 'fuel', 'body'].includes(key) ? 'catalog' : (Object.prototype.hasOwnProperty.call(ROYAL_CARS_PUBLISH_DEFAULTS, key) || ['description', 'final_description'].includes(key) ? 'company_profile' : sourceKind)]),
   );
 
   return {
