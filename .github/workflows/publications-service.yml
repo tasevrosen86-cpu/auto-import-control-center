@@ -15,8 +15,13 @@ name: Publications service control
 on:
   workflow_dispatch:
     inputs:
+      draft_id:
+        description: 'Чернова за сухото попълване (само за action=fill)'
+        required: false
+        default: ''
+        type: string
       action:
-        description: 'status | probe | stop | start'
+        description: 'status | probe | report | fill | stop | start'
         required: true
         default: status
         type: choice
