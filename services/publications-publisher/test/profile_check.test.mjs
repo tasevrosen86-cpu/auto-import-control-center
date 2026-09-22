@@ -108,6 +108,50 @@ check('непозната страница не дава ДА', unknown.out.incl
 check('изходният код е неуспех', unknown.code !== 0, `код ${unknown.code}`);
 check('казва, че не е могла да реши', unknown.out.includes('НЕЯСНО'), '');
 
+console.log('\n═══ липсващ профил се създава, вместо да спре run-а ═══');
+// The first version threw "Няма да бъде създаден автоматично", so a fresh
+// account could not run a task at all — there was no way to create the profile
+// the sign-in was meant to fill. This server has an empty list and answers the
+// create call.
+const emptyApi = http.createServer(async (request, response) => {
+  for await (const _ of request) { /* drain */ }
+  if (request.url === '/api/v4/profiles' && request.method === 'GET') {
+    return json(response, 200, { items: [], totalItems: 0 });
+  }
+  if (request.url === '/api/v4/profiles' && request.method === 'POST') {
+    return json(response, 200, { id: 'profile-created', name: 'mobilebg-publisher' });
+  }
+  return json(response, 404, { detail: 'no route ' + request.url });
+});
+await new Promise((resolve) => emptyApi.listen(0, '127.0.0.1', resolve));
+const emptyPort = emptyApi.address().port;
+
+// Runs the module directly: the profile is resolved inside the service, not
+// inside the check script, so this is where the create path can be observed.
+const created = await new Promise((resolve) => {
+  const child = spawn(process.execPath, ['--input-type=module', '-e', `
+    import { resolveProfile } from '${path.join(here, '..', 'src', 'browser_use.mjs')}';
+    process.stdout.write(await resolveProfile());
+  `], {
+    env: {
+
+      ...process.env,
+      BROWSER_USE_API_KEY: 'test-key-not-real',
+      BROWSER_USE_API_BASE: `http://127.0.0.1:${emptyPort}`,
+      BROWSER_USE_PROFILE: 'mobilebg-publisher',
+      BROWSER_PROFILE_ID: '',
+    },
+  });
+  let out = '';
+  let err = '';
+  child.stdout.on('data', (c) => { out += c; });
+  child.stderr.on('data', (c) => { err += c; });
+  child.on('close', (code) => resolve({ out, err, code }));
+});
+check('профилът се създава при първи run', created.out.trim() === 'profile-created',
+  `код ${created.code}, изход ${JSON.stringify(created.out.trim())}, грешка ${created.err.trim().slice(0, 200)}`);
+
+emptyApi.close();
 pageServer.close();
 api.close();
 console.log(`\n${failed === 0 ? 'ВСИЧКИ МИНАХА' : 'ИМА ПРОВАЛИ'}: ${passed} ok, ${failed} fail`);
