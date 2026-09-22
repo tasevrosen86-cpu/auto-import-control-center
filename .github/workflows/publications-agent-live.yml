@@ -1,0 +1,88 @@
+name: Publications agent live check
+
+# A real conversation with the Browser Use agent, run with the real key.
+#
+# The unit and HTTP tests run against a stub, which proves our own code but says
+# nothing about whether the live API accepts the calls we make. This workflow is
+# the other half: it creates a real run, waits for it, then sends a follow-up in
+# the same session to prove the agent keeps context.
+#
+# It is read-only by design. The task opens example.com and reads a title — no
+# form is submitted, no draft is touched and nothing is published. The key comes
+# from the BROWSER_USE_API_KEY repository secret and is never printed.
+#
+# Manual on purpose: it spends real credit, so it must never fire on its own.
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: 'Задача за агента (по избор; празно = задачата по подразбиране)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  live-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install publisher dependencies
+        working-directory: services/publications-publisher
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: npm install --no-audit --no-fund
+
+      - name: Verify the key is present
+        env:
+          BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
+        run: |
+          if [ -z "$BROWSER_USE_API_KEY" ]; then
+            echo "::error::BROWSER_USE_API_KEY е празна. Добави я като repository secret."
+            exit 1
+          fi
+          echo "Ключът е наличен (${#BROWSER_USE_API_KEY} знака)."
+
+      - name: Real conversation with the agent
+        id: live
+        working-directory: services/publications-publisher
+        env:
+          BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
+          BROWSER_PROFILE_ID: ${{ secrets.BROWSER_PROFILE_ID }}
+          AGENT_LIVE_TASK: ${{ inputs.task }}
+        run: |
+          set +e
+          node src/agent-live.mjs 2>&1 | tee /tmp/agent-live.log
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      # The verdict and the transcript are the whole point of the run, so they go
+      # on the summary instead of being buried in the log.
+      - name: Publish the verdict
+        if: always()
+        run: |
+          {
+            echo "## Публикации — реален разговор с агента"
+            echo ""
+            echo '```'
+            cat /tmp/agent-live.log 2>/dev/null || echo "Няма запис."
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail if the conversation did not finish
+        if: steps.live.outputs.exit_code != '0'
+        run: |
+          echo "::error::Разговорът с агента не завърши чисто (exit ${{
+            steps.live.outputs.exit_code }}). Виж резюмето на run-а."
+          exit 1

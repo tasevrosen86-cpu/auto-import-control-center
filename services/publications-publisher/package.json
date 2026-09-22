@@ -7,8 +7,10 @@
   "scripts": {
     "browser-test": "node src/index.mjs browser-test",
     "drain": "node src/index.mjs drain",
-    "test": "node test/form-steps.test.mjs",
-    "onboard": "node src/onboard.mjs"
+    "test": "node test/form-steps.test.mjs && node test/browser_agent.test.mjs && node test/browser_agent_http.test.mjs",
+    "test:agent": "node test/browser_agent.test.mjs && node test/browser_agent_http.test.mjs",
+    "onboard": "node src/onboard.mjs",
+    "agent-live": "node src/agent-live.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4"
