@@ -3,6 +3,7 @@ import { AlertTriangle, CheckCircle2, ExternalLink, FileText, Image, ImageIcon, 
 import { supabase } from '@/lib/supabase';
 import { formatDateTime } from '@/lib/format';
 import { EXTRA_GROUPS, MOBILE_BG_FIELD_MAP } from '@/lib/mobile_bg_field_map';
+import { PublicationAgentPanel } from '@/components/PublicationAgentPanel';
 
 type Job = { id:string; draft_id:string; source_url:string; status:'QUEUED'|'RUNNING'|'COMPLETED'|'FAILED'; error_message:string|null; created_at:string };
 type Field = { draft_id:string; field_key:string; value:string|null; source:string|null; mobile_bg_label:string; is_manual_edit:boolean };
@@ -158,6 +159,7 @@ export function Publications(){
     <section className="rounded-lg border border-slate-200 bg-white"><header className="border-b border-slate-100 px-3 py-3"><h2 className="flex items-center gap-1.5 text-sm font-bold text-slate-700"><FileText className="h-4 w-4"/>2. Провери и редактирай черновата</h2><p className="mt-1 text-[11px] text-slate-500">Пълният редактор от „Обяви“: виждаш всички снимки, избираш ги и добавяш/махаш екстри ръчно.</p></header>
       {!drafts.length?<p className="p-5 text-center text-xs text-slate-400">Още няма извлечена чернова.</p>:<><div className="p-3"><select value={selectedId} onChange={e=>{setSelectedId(e.target.value);setPrice('')}} className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm">{drafts.map(item=><option key={item.id} value={item.id}>{item.title||item.source_url||'URL чернова'} · {formatDateTime(item.created_at)}</option>)}</select></div>{draft&&<PublicationDraftEditor draft={draft} field={field} missing={missing} selectedImages={selectedImages} price={price} setPrice={setPrice} busy={busy||savingEditor} currentPublish={currentPublish} onPrepare={prepare} onPublish={queuePublish} onEdit={editDraft} status={status}/>}</>}
     </section>
+    <PublicationAgentPanel draftTitle={draft?.title||undefined}/>
   </div>;
 }
 

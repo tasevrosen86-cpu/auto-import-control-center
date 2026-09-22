@@ -530,6 +530,68 @@ form, not as a library to execute.
 `browser-test` is a gate, not a formality: it reports whether the form and its
 fields are really present, and it currently answers no.
 
+## The Browser Use agent inside «Публикации»
+
+«Публикации» has two Browser Use things, and they are not the same thing:
+
+* **The visible browser** (`browser_use.mjs`) is infrastructure. We create a
+  remote Chromium and drive it ourselves over CDP. It is what the
+  «Влез в Mobile.bg» button opens, and what the manual broker uses.
+* **The agent** (`browser_agent.mjs`) is the AI. We hand it a task in words and
+  read back a result. It is what the «Browser Use агент» panel at the bottom of
+  the page talks to. Both share `BROWSER_USE_API_KEY` and neither ever returns
+  that key to a caller.
+
+The path is: site → `PublicationAgentPanel` → protected VPS bridge → Browser Use
+v4 `/runs`. The site never speaks to Browser Use directly, so the key stays in
+`/etc/aicc-publications.env` on the VPS.
+
+Three endpoints, all `POST`, all behind the same signed Admin ticket the visible
+browser uses (nginx `auth_request` against `publication-browser-access/validate`):
+
+```
+/publications-browser/agent          { task }                    → { run_id, session_id, status }
+/publications-browser/agent/status   { run_id }                  → { status, terminal, result, error }
+/publications-browser/agent/message  { session_id, text }        → { queued }
+```
+
+The `ticket` query parameter is issued by the Edge Function, exactly as for
+`/publications-browser/open`. The bridge binds them to exact-match locations
+placed *before* the `/publications-browser/` static catch-all, so no other path
+reaches port 6081.
+
+Decisions that are deliberate and should stay:
+
+* **A task is validated before it is sent.** Empty, whitespace-only or longer
+  than 4000 characters is rejected with `400` *without touching the network*, so
+  a bad request cannot start a run that bills. The test asserts the stub API saw
+  zero requests.
+* **Runs are asynchronous.** `POST /runs` returns a run id immediately and the
+  panel polls `/agent/status` every 3 s. A terminal status stops the polling, so
+  a timeout can never silently start a second run and a finished run is not
+  re-read for ever.
+* **`result` and `error` are hidden until the status is terminal.** A run that
+  is still going reports `null` for both rather than stale text from the last
+  poll.
+* **Continuing a conversation uses the session, not the run.** `POST
+  /sessions/{id}/queue` is what carries context forward; the run id alone does
+  not.
+* **402 is called out as missing credit.** It is not a wrong key and not a
+  block, and at a distance the three look identical.
+
+Credentials for a task that needs the signed-in Mobile.bg session come from the
+browser profile (`BROWSER_PROFILE_ID`), not from the prompt. Passwords are never
+put into a task.
+
+Tests (no secrets, no network — they start their own stub API):
+
+```bash
+cd services/publications-publisher && npm run test:agent
+```
+
+`test/browser_agent.test.mjs` covers the module; `test/browser_agent_http.test.mjs`
+starts the bridge as a child process and speaks to it over loopback HTTP.
+
 ## The gateway call shape is the one unknown left
 
 The proven script shows exactly one gateway call — `browser/upload` with a

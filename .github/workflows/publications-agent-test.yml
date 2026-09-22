@@ -1,0 +1,53 @@
+name: Publications agent test
+
+# Unit and HTTP tests for the Browser Use agent embedded in «Публикации».
+#
+# These need no secrets and no network: the tests start their own stub of the
+# Browser Use API and the bridge is spoken to over real loopback HTTP. What that
+# buys is the part that must not regress — a task that fails validation never
+# starts a paid run, a terminal run stops being polled, and the API key appears
+# only in the outgoing request header and never in a response.
+
+on:
+  pull_request:
+    paths:
+      - 'services/publications-publisher/**'
+      - 'src/components/PublicationAgentPanel.tsx'
+      - 'src/pages/Publications.tsx'
+      - '.github/workflows/publications-agent-test.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'services/publications-publisher/**'
+      - 'src/components/PublicationAgentPanel.tsx'
+      - 'src/pages/Publications.tsx'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  agent-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install publisher dependencies
+        working-directory: services/publications-publisher
+        env:
+          # The bridge imports the Playwright client, but nothing here launches a
+          # browser, so there is no reason to download one.
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: npm install --no-audit --no-fund
+
+      - name: Agent module and bridge routes
+        working-directory: services/publications-publisher
+        run: npm run test:agent

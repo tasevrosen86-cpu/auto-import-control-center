@@ -5,6 +5,7 @@
 import http from 'node:http';
 import { chromium } from 'playwright';
 import { createBrowser, stopBrowser } from './browser_use.mjs';
+import { agentConfigured, startRun, runStatus, queueMessage, cleanTask, taskProblem, MAX_TASK_CHARS } from './browser_agent.mjs';
 
 const host = '127.0.0.1';
 const port = Number(process.env.PUBLICATIONS_BROWSER_ACCESS_PORT || 6081);
@@ -150,12 +151,95 @@ async function openLiveBrowser() {
   return { liveUrl: created.liveUrl, login };
 }
 
+// Reads a small JSON body. The cap matches the task limit plus room for the
+// envelope, so an oversized request is refused before it is parsed rather than
+// after it is buffered.
+function readBody(request, limit = 16 * 1024) {
+  return new Promise((resolve, reject) => {
+    let raw = '';
+    let size = 0;
+    request.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > limit) {
+        reject(new Error('Тялото на заявката е твърде голямо.'));
+        request.destroy();
+        return;
+      }
+      raw += chunk;
+    });
+    request.on('end', () => {
+      try { resolve(raw ? JSON.parse(raw) : {}); } catch { reject(new Error('Невалиден JSON.')); }
+    });
+    request.on('error', reject);
+  });
+}
+
 const server = http.createServer(async (request, response) => {
   const path = request.url?.split('?')[0];
   if (request.method !== 'POST') {
     json(response, 404, { error: 'Not found' });
     return;
   }
+
+  // The agent endpoints share the bridge's protection: nginx only reaches this
+  // process after the signed Admin ticket is validated. The task text is passed
+  // through untouched apart from trimming — it is the agent's input, not ours.
+  if (path === '/agent') {
+    try {
+      const body = await readBody(request);
+      const task = cleanTask(body.task);
+      const problem = taskProblem(task);
+      // A rejected task never reaches Browser Use, so a bad request costs
+      // nothing and cannot start a run that bills.
+      if (problem) { json(response, 400, { error: problem }); return; }
+      if (!agentConfigured()) {
+        json(response, 503, { error: 'Липсва BROWSER_USE_API_KEY на сървъра. Агентът не може да стартира.' });
+        return;
+      }
+      const run = await startRun(task);
+      json(response, 200, {
+        run_id: run.runId,
+        session_id: run.sessionId,
+        status: run.status,
+        max_task_chars: MAX_TASK_CHARS,
+      });
+    } catch (error) {
+      console.error('Browser Use agent start failed:', error instanceof Error ? error.message : error);
+      json(response, 502, { error: error instanceof Error ? error.message : 'Задачата не стартира.' });
+    }
+    return;
+  }
+
+  if (path === '/agent/status') {
+    try {
+      const body = await readBody(request);
+      const runId = String(body.run_id || '').trim();
+      if (!runId) { json(response, 400, { error: 'Липсва run_id.' }); return; }
+      json(response, 200, await runStatus(runId));
+    } catch (error) {
+      console.error('Browser Use agent status failed:', error instanceof Error ? error.message : error);
+      json(response, 502, { error: error instanceof Error ? error.message : 'Статусът не може да бъде прочетен.' });
+    }
+    return;
+  }
+
+  if (path === '/agent/message') {
+    try {
+      const body = await readBody(request);
+      const sessionId = String(body.session_id || '').trim();
+      const text = cleanTask(body.text);
+      if (!sessionId) { json(response, 400, { error: 'Липсва session_id.' }); return; }
+      const problem = taskProblem(text);
+      if (problem) { json(response, 400, { error: problem }); return; }
+      await queueMessage(sessionId, text);
+      json(response, 200, { queued: true });
+    } catch (error) {
+      console.error('Browser Use agent message failed:', error instanceof Error ? error.message : error);
+      json(response, 502, { error: error instanceof Error ? error.message : 'Съобщението не бе прието.' });
+    }
+    return;
+  }
+
   if (path === '/close') {
     await stopActive();
     json(response, 200, { closed: true });

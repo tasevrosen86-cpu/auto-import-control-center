@@ -435,6 +435,46 @@ jobs:
             proxy_buffering off;
             add_header Cache-Control "no-store" always;
           }
+          # The Browser Use agent runs behind the same signed Admin ticket as the
+          # visible browser. Exact matches so they are reached before the static
+          # /publications-browser/ catch-all below, and so no other path can
+          # proxy to the bridge. The API key stays in the VPS environment file.
+          location = /publications-browser/agent {
+            access_log off;
+            auth_request /_aicc_publications_browser_auth;
+            proxy_pass http://127.0.0.1:6081/agent;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_read_timeout 120s;
+            proxy_buffering off;
+            add_header Cache-Control "no-store" always;
+          }
+          location = /publications-browser/agent/status {
+            access_log off;
+            auth_request /_aicc_publications_browser_auth;
+            proxy_pass http://127.0.0.1:6081/agent/status;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_read_timeout 120s;
+            proxy_buffering off;
+            add_header Cache-Control "no-store" always;
+          }
+          location = /publications-browser/agent/message {
+            access_log off;
+            auth_request /_aicc_publications_browser_auth;
+            proxy_pass http://127.0.0.1:6081/agent/message;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_read_timeout 120s;
+            proxy_buffering off;
+            add_header Cache-Control "no-store" always;
+          }
           location = /publications-browser/websockify {
             access_log off;
             auth_request /_aicc_publications_browser_auth;
