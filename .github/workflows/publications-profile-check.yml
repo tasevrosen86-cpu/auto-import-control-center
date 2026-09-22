@@ -6,6 +6,11 @@ name: Publications profile check
 # a first login, when it will report that no session exists yet.
 on:
   workflow_dispatch:
+    inputs:
+      verify:
+        description: 'Отвори браузър и провери живата сесия (харчи малко кредит)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -39,7 +44,12 @@ jobs:
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
           BROWSER_PROFILE_ID: ${{ secrets.BROWSER_PROFILE_ID }}
           BROWSER_USE_PROFILE: ${{ secrets.BROWSER_USE_PROFILE }}
-        run: node src/profile-check.mjs
+        run: |
+          if [ "${{ inputs.verify }}" = "true" ]; then
+            node src/profile-check.mjs --verify
+          else
+            node src/profile-check.mjs
+          fi
 
       - name: Verdict
         if: always()
