@@ -73,6 +73,11 @@ export async function fillTest(draftId){
  if(!draftId) throw new Error('Дай draft_id: node src/index.mjs fill-test <draft-id>');
  const item=await payload({draft_id:draftId});
  const check=preflight(item);
+ // Every stored field of the draft, because a translation that cannot be derived
+ // from the mapped subset may still be derivable from a field that is stored but
+ // not mapped — and guessing is not an option.
+ const {data:fieldRows}=await db.from('publication_draft_fields').select('field_key,value').eq('draft_id',draftId);
+ const allFields=Object.fromEntries((fieldRows||[]).map(row=>[row.field_key,String(row.value??'')]));
  const session=await openSession();
  try{
   await openForm(session);
@@ -86,6 +91,7 @@ export async function fillTest(draftId){
     verdict:filled.state==='filled'?'FILLED':'FILL_FAILED',
     draft_id:draftId,transport:describeTransport(),preflight:check,login_state:login.state,
     draft_values:{make:item.make,model:item.model,year:item.year,mileage:item.mileage,fuel:item.fuel,transmission:item.transmission,body:item.body,color:item.color,power:item.power,country_label:item.country_label,month:item.month,price_eur:item.price_eur},
+    all_fields:allFields,
     rejected:filled.rejected,chosen_labels:filled.chosen_labels,filled:filled.filled,
   };
  }catch(error){
