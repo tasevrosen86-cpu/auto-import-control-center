@@ -82,6 +82,10 @@ export function PublicationAgentPanel({ draftTitle }: { draftTitle?: string }) {
 
   // Polling stops on any terminal status. That is what keeps a finished run from
   // being re-read forever and a failed run from looking like it is still going.
+  //
+  // Each poll is for a named run, not for "the session": after a follow-up the
+  // current run changes, and re-reading the old id would show the old result as
+  // if it were the new answer.
   const poll = useCallback(async (runId: string) => {
     const response = await callAgent('/agent/status', { run_id: runId });
     if (!response.ok) return;
@@ -119,14 +123,24 @@ export function PublicationAgentPanel({ draftTitle }: { draftTitle?: string }) {
   async function sendFollowUp() {
     const text = followUp.trim();
     if (!text || !run?.sessionId) return;
+    stopPolling();
     setBusy(true); setError('');
-    const response = await callAgent('/agent/message', { session_id: run.sessionId, text });
+    const response = await callAgent('/agent/message', { session_id: run.sessionId, run_id: run.runId, text });
     setBusy(false);
     if (!response.ok) { setError(response.error); return; }
+
     setFollowUp('');
-    // The follow-up continues in the same session, so the run list is polled
-    // again rather than started fresh — the agent keeps its context.
-    timer.current = window.setInterval(() => void poll(run.runId), POLL_MS);
+    // The follow-up is a new run in the same session. Polling must switch to
+    // that run — the old id is already terminal and would return the old result
+    // immediately, which reads as a successful answer and is not one.
+    const next = response.data as { run_id: string | null; started: boolean };
+    if (!next.run_id || !next.started) {
+      setError('Съобщението е прието, но новият run още не е започнал. Изчакайте и продължете отново.');
+      return;
+    }
+    setRun((current) => (current ? { ...current, runId: next.run_id!, status: 'queued', terminal: false, result: null, error: null } : current));
+    timer.current = window.setInterval(() => void poll(next.run_id!), POLL_MS);
+    void poll(next.run_id!);
   }
 
   const running = Boolean(run && !run.terminal);

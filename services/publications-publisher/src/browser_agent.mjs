@@ -132,6 +132,12 @@ export async function runStatus(runId) {
 // Continues the conversation in the same session. Browser Use calls this the
 // session queue; the run id is not enough, the session id is what carries the
 // context forward.
+//
+// The reply carries the `runId` the message created — measured against the live
+// service: `QueuedMessage` has `runId`, `mode` and a `status` that walks
+// pending → dispatching → consumed. That id is the only correct thing to poll
+// afterwards. Polling the previous run id returns the *previous* run's result
+// instantly, which looks like a successful follow-up and is not one.
 export async function queueMessage(sessionId, text, options = {}) {
   const response = await fetch(`${API_BASE}${SESSIONS_PATH}/${encodeURIComponent(sessionId)}/queue`, {
     method: 'POST',
@@ -140,5 +146,48 @@ export async function queueMessage(sessionId, text, options = {}) {
   });
   const data = await readJson(response);
   if (!response.ok) throw serviceError(response, data, 'добавянето на съобщение');
-  return data;
+  return { messageId: data.id ?? null, runId: data.runId ?? null, status: data.status ?? null };
 }
+
+// Reads the session itself. `latestRunId` is the authoritative answer to "which
+// run is the conversation on now", and it is also the cheap busy/idle poll the
+// API documents for a conversation.
+export async function sessionInfo(sessionId) {
+  const response = await fetch(`${API_BASE}${SESSIONS_PATH}/${encodeURIComponent(sessionId)}`, {
+    headers: headers(),
+  });
+  const data = await readJson(response);
+  if (!response.ok) throw serviceError(response, data, 'четенето на сесията');
+  return {
+    sessionId: data.sessionId || sessionId,
+    latestRunId: data.latestRunId || null,
+    status: data.status || 'unknown',
+  };
+}
+
+// Waits for the follow-up to become its own run.
+//
+// `queueMessage` can accept a message before the new run exists, so the run id
+// from the reply is sometimes null and sometimes still the old one. Reading the
+// session until `latestRunId` differs from the run we came from is what makes
+// the follow-up correct rather than merely plausible. A timeout is reported as
+// "accepted but not started", not as a failure, because the message is not lost.
+export async function waitForNewRun(sessionId, previousRunId, options = {}) {
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  const intervalMs = options.intervalMs ?? 1_500;
+  const started = Date.now();
+  let last = null;
+  while (Date.now() - started < timeoutMs) {
+    last = await sessionInfo(sessionId);
+    if (last.latestRunId && last.latestRunId !== previousRunId) {
+      return { ...last, started: true, seconds: Math.round((Date.now() - started) / 1000) };
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return {
+    ...(last || { sessionId, latestRunId: null, status: 'unknown' }),
+    started: false,
+    seconds: Math.round((Date.now() - started) / 1000),
+  };
+}
+

@@ -5,7 +5,7 @@
 import http from 'node:http';
 import { chromium } from 'playwright';
 import { createBrowser, stopBrowser } from './browser_use.mjs';
-import { agentConfigured, startRun, runStatus, queueMessage, cleanTask, taskProblem, MAX_TASK_CHARS } from './browser_agent.mjs';
+import { agentConfigured, startRun, runStatus, queueMessage, sessionInfo, waitForNewRun, cleanTask, taskProblem, MAX_TASK_CHARS } from './browser_agent.mjs';
 
 const host = '127.0.0.1';
 const port = Number(process.env.PUBLICATIONS_BROWSER_ACCESS_PORT || 6081);
@@ -213,8 +213,15 @@ const server = http.createServer(async (request, response) => {
   if (path === '/agent/status') {
     try {
       const body = await readBody(request);
-      const runId = String(body.run_id || '').trim();
-      if (!runId) { json(response, 400, { error: 'Липсва run_id.' }); return; }
+      let runId = String(body.run_id || '').trim();
+      const sessionId = String(body.session_id || '').trim();
+      // A follow-up changes which run is current, so a caller that only knows
+      // the session can still ask "where is it now" without tracking ids.
+      if (!runId && sessionId) {
+        const session = await sessionInfo(sessionId);
+        runId = session.latestRunId || '';
+      }
+      if (!runId) { json(response, 400, { error: 'Липсва run_id (или session_id с активен run).' }); return; }
       json(response, 200, await runStatus(runId));
     } catch (error) {
       console.error('Browser Use agent status failed:', error instanceof Error ? error.message : error);
@@ -227,12 +234,23 @@ const server = http.createServer(async (request, response) => {
     try {
       const body = await readBody(request);
       const sessionId = String(body.session_id || '').trim();
+      const previousRunId = String(body.run_id || '').trim();
       const text = cleanTask(body.text);
       if (!sessionId) { json(response, 400, { error: 'Липсва session_id.' }); return; }
       const problem = taskProblem(text);
       if (problem) { json(response, 400, { error: problem }); return; }
-      await queueMessage(sessionId, text);
-      json(response, 200, { queued: true });
+
+      const queued = await queueMessage(sessionId, text);
+      // The new run may not exist yet at the moment the message is accepted, so
+      // the session is read until it points at a different run. Without this the
+      // caller would poll the previous run and show its result as the answer.
+      let runId = queued.runId || '';
+      let started = Boolean(runId) && runId !== previousRunId;
+      if (!started) {
+        const waited = await waitForNewRun(sessionId, previousRunId);
+        if (waited.started) { runId = waited.latestRunId; started = true; }
+      }
+      json(response, 200, { queued: true, run_id: runId || null, started, message_id: queued.messageId });
     } catch (error) {
       console.error('Browser Use agent message failed:', error instanceof Error ? error.message : error);
       json(response, 502, { error: error instanceof Error ? error.message : 'Съобщението не бе прието.' });
