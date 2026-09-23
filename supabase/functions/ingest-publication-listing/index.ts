@@ -53,9 +53,6 @@ const fieldMeta: Record<string, { label: string; dbKey: string; fieldType: strin
   title: { label: 'Заглавие', dbKey: 'title', fieldType: 'text' },
   description: { label: 'Описание', dbKey: 'description', fieldType: 'textarea' },
   final_description: { label: 'Финално описание за Mobile.bg', dbKey: 'final_description', fieldType: 'textarea' },
-  // Dealer's own "Vehicle Description" text from the Canadian listing. Read-only:
-  // it exists to locate the exact Mobile.bg model, not to be published as-is.
-  vehicle_instructions: { label: 'Описание Канада', dbKey: 'vehicle_instructions', fieldType: 'textarea' },
   company_template: { label: 'Шаблон на фирмата', dbKey: 'company_template', fieldType: 'select' },
   description_language: { label: 'Език на описанието', dbKey: 'description_language', fieldType: 'select' },
   location: { label: 'Населено място/област', dbKey: 'location', fieldType: 'text' },

@@ -3,8 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "run-once": "tsx src/index.ts",
-    "test": "tsx test/vehicle-description.test.mjs"
+    "run-once": "tsx src/index.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",

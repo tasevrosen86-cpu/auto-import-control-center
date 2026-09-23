@@ -1,6 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
 import { chromium, type Page } from 'playwright';
-import { vehicleDescription } from './vehicle-description.js';
 
 type SourceJob = { id: string; draft_id?: string; source_type: 'encar' | 'autotrader_ca' | 'other'; source_url: string; attempt_count: number; flow?: 'ads' | 'publications' };
 type JsonRecord = Record<string, unknown>;
@@ -392,7 +391,7 @@ function extractExtras(root: unknown, proof: string, source: string): DraftExtra
   }));
 }
 
-function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string, detail: ReturnType<typeof valuesFromDetailText> = valuesFromDetailText(''), domImageUrls: string[] = [], instructions: { text: string; from: string } = { text: '', from: '' }) {
+function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string, detail: ReturnType<typeof valuesFromDetailText> = valuesFromDetailText(''), domImageUrls: string[] = []) {
   const vehicle = vehicleRecord(documents);
   const source = job.source_type;
   const autoDetail = source === 'autotrader_ca' ? autotraderVehicle(documents) : {};
@@ -462,10 +461,6 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string,
   push('drivetrain', normalizeDrivetrain(firstValue(vehicle, ['driveWheelConfiguration', 'drivetrain', 'driveType']) || scalar(autoDetail.driveTrain)));
   push('description', description);
   push('final_description', description);
-  // The dealer's own "Vehicle Description" text is a Publications-only field.
-  // «Обяви» keeps its company template in description/final_description, so this
-  // must not leak into the shared extraction path.
-  if (job.flow === 'publications') push('vehicle_instructions', instructions.text.trim() || null);
   push('location', source === 'encar' ? 'Извън страната → Южна Корея' : 'Извън страната → Канада');
   push('seller_name', 'RoyalCarsBG');
   push('phone', '0887353653');
@@ -495,7 +490,6 @@ function makePayload(job: SourceJob, documents: JsonRecord[], pageTitle: string,
     mileage: { value: mileage, from: mileagePick.from },
     fuel: { value: fuel, from: fuelPick.from },
     images: { count: payloadImages.length, main: payloadImages[0]?.source_url || null },
-    vehicle_instructions: { from: instructions.from, length: instructions.text.length },
   }));
 
   return {
@@ -549,8 +543,7 @@ async function run() {
     const detailText = await page.locator('body').innerText().catch(() => '');
     const detail = valuesFromDetailText(detailText);
     const domImageUrls = await page.locator('img').evaluateAll(nodes => nodes.map(node => (node as HTMLImageElement).currentSrc || (node as HTMLImageElement).src).filter(Boolean));
-    const instructions = job.source_type === 'autotrader_ca' ? await vehicleDescription(page) : { text: '', from: '' };
-    const payload = makePayload(job, documents, await page.title(), detail, domImageUrls, instructions);
+    const payload = makePayload(job, documents, await page.title(), detail, domImageUrls);
     const response = await fetch(job.flow === 'publications' ? publicationIngestUrl : ingestUrl, {
       method: 'POST',
       headers: {
