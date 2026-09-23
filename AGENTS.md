@@ -189,6 +189,40 @@ catalog JSON (`createDraftSeed`, `src/lib/draft_seed.ts`) with no link and no
 listing opened. The URL importer is separate — it opens a listing, normalises the
 extracted data into the same field shape, and only then feeds the draft builder.
 
+## What the catalog actually carries, and what the form therefore asks for
+
+`src/data/master_catalog_v40.json` holds 4674 records. Per source side it stores
+only `filter_url`, `listing_url`, `listing_id`, `price_*`, `final_eur`,
+`configuration`, `last_check`, `status`, `vin` and `mileage_km` — and in the
+shipped file `vin` and `mileage_km` are **null in all 4674**, on both sides.
+There is no `transmission`, `power`, `displacement` or `colour` key anywhere.
+
+Face-value consequences for a catalog draft, confirmed by running every entry
+through `createDraftSeed` and `buildMobileBgPlan`:
+
+* `gearbox` and `mileage` are empty in **100 %** of drafts (5047 Korea/Canada
+  drafts), and `price` is empty in 17 %.
+* All three are `required: true` in `MOBILE_BG_FIELD_MAP`, so the plan reports
+  them as `missing` and the broker must fill them. This is expected, not a bug.
+
+The trap is that `detailFallback` in `src/lib/draft_seed.ts` derives these from
+the raw JSON by regex, so a too-greedy pattern does not leave the field empty —
+it invents a value that looks plausible. Both bugs found so far are this shape:
+
+* **`mileage` — fixed in `bace027`.** The window allowed 20 characters between
+  label and digits and swallowed the next key, so `"mileage_km": null, "year":
+  2020` recorded 2020 as the distance for 4297 drafts. The commit that fixed it
+  is why catalog mileage went from wrong to empty; the commit message claims
+  3669 records, the figure measured here is 4297.
+* **`power` — same shape, fixed later.** `[^0-9]{0,20}` read the AutoTrader URL
+  slug, so `.../hyundai-veloster-n-power-2-0l` was recorded as 2 hp and
+  `...-cat_ma15641gr...` as 15641. It now requires the value to follow the key,
+  which correctly yields empty.
+
+When adding a derived field here, require the value to follow its key and leave
+the field empty when the source has none. An empty field is visible and the
+broker fills it; a plausible wrong number silently becomes a published listing.
+
 ## Applying migrations
 
 There is no Supabase CLI here and no DB credentials in the agent environment.
@@ -529,6 +563,44 @@ form, not as a library to execute.
 
 `browser-test` is a gate, not a formality: it reports whether the form and its
 fields are really present, and it currently answers no.
+
+## The two publishing paths, and why they are separate
+
+The table `mobile_bg_publish_jobs` carries **two** kinds of job, told apart by
+`transport`. Getting this wrong makes one worker do the other's work.
+
+| Section | `transport` | Worker | Method |
+|---|---|---|---|
+| «Обяви» | `OFFICIAL_API` | `services/mobile-bg-api-publisher` | official Mobile.bg import API |
+| «Публикации» | `BROWSER_ON_DEMAND` | `services/mobile-publisher` | fills the form in a browser |
+
+Both workers filter their scan on their own `transport`. Before that filter
+existed, a scan by status alone would hand an API job to the browser worker.
+
+The API path follows the documented order — `login` → `catfields` → `advertpub`
+→ `advertpicts` → `advertload` → `logout` — and the documentation lives at
+<https://api.mobile.bg/import_doc/>.
+
+Three facts about that API drive the design, and each was learned the hard way:
+
+* **The token is valid for three minutes.** It is never stored, logged or
+  returned to the browser. A run logs in, keeps it in memory, and logs out.
+* **Pictures are fetched, not uploaded.** `advertpicts` is given paths, and
+  Mobile.bg downloads them from the domain registered against the account, so an
+  external URL can never work and the file must be `.jpg`/`.jpeg`.
+* **The listing is published before the pictures exist.** A picture failure
+  therefore leaves a real, possibly paid, listing behind. `listing_id` is written
+  to the job as soon as it is known, so a retry attaches pictures to that listing
+  instead of publishing a second one.
+
+`advertviptop` bills the account the moment it is called. It is deliberately not
+implemented, and must not be added to an automatic run.
+
+Diagnostics for a run — step, endpoint, HTTP status, Mobile.bg's answer, the
+fields sent, and the step that failed — are stored in
+`mobile_bg_publish_jobs.api_trace` and shown by `ApiPublishDiagnostics` in
+«Обяви». The trace is redacted before it is written: no token, password or
+username ever reaches it.
 
 ## The Browser Use agent inside «Публикации»
 

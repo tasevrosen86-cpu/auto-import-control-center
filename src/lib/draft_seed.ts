@@ -77,8 +77,12 @@ function detailFallback(raw: Record<string, unknown>) {
   return {
     mileage: pick([/(?:mileage|odometer|пробег)[a-z_]*"?\s*:\s*"?([0-9][0-9, .]*)/i]),
     gearbox: pick([/(?:transmission|gearbox|скоростна кутия)[^:"]{0,10}[:"]\s*([^,"}]+)/i]),
-    power: pick([/(?:horsepower|power|мощност)[^0-9]{0,20}([0-9][0-9 .]*)/i]),
-    displacement: pick([/(?:displacement|engineDisplacement|кубатура|работен обем)[^0-9]{0,20}([0-9][0-9 .]*)/i]),
+    // The value must follow the key. A window that tolerated arbitrary text in
+    // between read the AutoTrader URL slug instead — ".../hyundai-veloster-n-power-2-0l"
+    // was recorded as 2 hp. The catalog has no power key at all, so leaving this
+    // empty is the honest result and the broker fills it.
+    power: pick([/(?:horsepower|power_hp|power|мощност)"?\s*:\s*"?([0-9][0-9 .]*)/i]),
+    displacement: pick([/(?:displacement|engineDisplacement|кубатура|работен обем)"?\s*:\s*"?([0-9][0-9 .]*)/i]),
     euro: pick([/(?:euroStandard|euro_standard|emissionClass|екокатегория)[^:"]{0,10}[:"]\s*([^,"}]+)/i]),
     color: pick([/(?:colou?r|vehicleColor|exteriorColor|bodyColor|цвят)[^:"]{0,10}[:"]\s*([^,"}]+)/i]),
   };

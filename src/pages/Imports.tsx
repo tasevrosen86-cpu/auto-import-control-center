@@ -17,6 +17,7 @@ import {
 } from '@/lib/mobile_bg_field_map';
 import { getPublishReadiness } from '@/lib/mobile_publisher';
 import { LivePublishScreen } from '@/components/LivePublishScreen';
+import { ApiPublishDiagnostics } from '@/components/ApiPublishDiagnostics';
 import type {
   ImportRecord, ImportConflict,
   MobileBgDraft, MobileBgDraftField, MobileBgDraftExtra,
@@ -1045,6 +1046,11 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
   // Pressing "Публикувай" swaps this page for the live screen. Going back shows
   // the same draft again, so the broker never loses the form they were editing.
   const [showLiveView, setShowLiveView] = useState(false);
+  // The API path is separate from the browser path and has its own screens: one
+  // button to queue it, one panel to watch and diagnose it.
+  const [showApiView, setShowApiView] = useState(false);
+  const [apiPublishJob, setApiPublishJob] = useState<MobileBgPublishJob | null>(null);
+  const [queuingApiPublish, setQueuingApiPublish] = useState(false);
 
   const loadDraft = useCallback(async () => {
     const [dRes, fRes, eRes, iRes, lRes, ddRes, pRes] = await Promise.all([
@@ -1058,6 +1064,7 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
     ]);
     const loadedDraft = (dRes.data || null) as MobileBgDraft | null;
     const loadedFields = (fRes.data || []) as MobileBgDraftField[];
+    setApiPublishJob((pRes.data as MobileBgPublishJob) || null);
     let effectiveFields = loadedFields;
     if (loadedDraft) {
       const autofillRows = draftAutofillRows(loadedDraft, loadedFields);
@@ -1189,6 +1196,25 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
     if (!window.confirm('Ще изпратя тази тестова обява към Mobile.bg. Възможно е да бъде публикувана реално. Продължаваме?')) return;
     setQueuingPublish(true);
     try {
+      // The row is shared with the API path through UNIQUE(draft_id), so this
+      // button must not silently convert a job that is already queued or running
+      // for the API into a browser job — that would hand an OFFICIAL_API job to
+      // the browser worker, which is exactly what the transport split prevents.
+      const { data: existing, error: existingError } = await supabase
+        .from('mobile_bg_publish_jobs')
+        .select('id,status,transport')
+        .eq('draft_id', draftId)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (existing?.status === 'RUNNING') {
+        window.alert('Заявката се изпълнява в момента. Изчакай да завърши, преди да я пуснеш пак.');
+        return;
+      }
+      if (existing?.transport === 'OFFICIAL_API') {
+        window.alert('За тази чернова вече има заявка през Mobile.bg API. Пусни я оттам, за да не се дублира обявата.');
+        return;
+      }
+
       const now = new Date().toISOString();
       const { data, error } = await supabase.from('mobile_bg_publish_jobs').upsert({
         draft_id: draftId, status: 'QUEUED', transport: 'BROWSER_ON_DEMAND', mode: 'LIVE',
@@ -1210,10 +1236,59 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
     }
   }
 
+  // The «Обяви» API path. It writes the same row as the browser path but with a
+  // different transport, which is what routes it to the API worker instead of
+  // Browser Use. The draft is left untouched here: all the validation that can
+  // be done without the network runs in the worker, so its verdict — not this
+  // button's — is what the broker sees, and nothing is lost on a rejection.
+  //
+  // The table has UNIQUE(draft_id), so a draft has exactly one job row and the
+  // two buttons share it. A job that is already RUNNING must therefore never be
+  // overwritten: doing so would change its transport mid-flight and leave the
+  // worker that claimed it writing to a row that is no longer its own.
+  async function queueApiPublish() {
+    setQueuingApiPublish(true);
+    try {
+      const { data: existing, error: existingError } = await supabase
+        .from('mobile_bg_publish_jobs')
+        .select('id,status,transport')
+        .eq('draft_id', draftId)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (existing?.status === 'RUNNING') {
+        window.alert(existing.transport === 'OFFICIAL_API'
+          ? 'Заявката се изпълнява в момента. Изчакай да завърши, преди да я пуснеш пак.'
+          : 'В момента тече публикуване през браузъра за тази чернова. Изчакай да завърши — иначе двете заявки ще си пречат.');
+        return;
+      }
+
+      const now = new Date().toISOString();
+      const { data, error } = await supabase.from('mobile_bg_publish_jobs').upsert({
+        draft_id: draftId, status: 'QUEUED', transport: 'OFFICIAL_API', mode: 'LIVE',
+        requested_by: 'Росен', requested_at: now, updated_at: now, last_error: null,
+        // listing_id is deliberately not cleared. When a previous attempt got as
+        // far as creating the listing, keeping it is what makes this retry attach
+        // the pictures to that same listing instead of publishing a second one.
+      }, { onConflict: 'draft_id' }).select().single();
+      if (error) throw error;
+      await supabase.from('mobile_bg_draft_action_log').insert({
+        draft_id: draftId, action: 'MOBILE_API_PUBLISH_QUEUED', actor: 'Росен',
+        details: { transport: 'OFFICIAL_API', mode: 'LIVE' },
+      });
+      setApiPublishJob(data as MobileBgPublishJob);
+      setShowApiView(true);
+    } catch (error) {
+      window.alert(`Заявката не можа да бъде изпратена: ${error instanceof Error ? error.message : 'неизвестна грешка'}`);
+    } finally {
+      setQueuingApiPublish(false);
+    }
+  }
+
   if (loading) return <div className="flex items-center justify-center h-96 text-slate-400">Зареждане...</div>;
   if (!draft) return <div className="text-center text-slate-400 py-12">Черновата не е намерена</div>;
 
   if (showLiveView) return <LivePublishScreen draftId={draftId} onBack={() => { setShowLiveView(false); void loadDraft(); }} />;
+  if (showApiView) return <ApiPublishDiagnostics draftId={draftId} onBack={() => { setShowApiView(false); void loadDraft(); }} />;
 
   const fieldsByKey = new Map(fields.map(field => [field.field_key, field]));
   const extrasByKey = new Map(extras.map(extra => [extra.extra_key, extra]));
@@ -1242,6 +1317,14 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
           <button onClick={queuePublish} disabled={queuingPublish || publishJob?.status === 'RUNNING' || draft.extraction_status === 'SOURCE_PENDING'} className="rounded-md bg-emerald-600 px-3 py-2 text-xs font-bold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">
             {queuingPublish ? 'Подготвяне…' : 'Публикувай (ръчно потвърждение)'}
           </button>
+          <button onClick={queueApiPublish} disabled={queuingApiPublish || apiPublishJob?.status === 'RUNNING' || draft.extraction_status === 'SOURCE_PENDING'} className="rounded-md border border-blue-300 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-800 shadow-sm hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60">
+            {queuingApiPublish ? 'Подготвяне…' : 'Публикувай през Mobile.bg API'}
+          </button>
+          {apiPublishJob && (
+            <button onClick={() => setShowApiView(true)} className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+              Диагностика
+            </button>
+          )}
         </div>
       </div>
 

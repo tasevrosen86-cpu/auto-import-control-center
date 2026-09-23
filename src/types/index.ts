@@ -303,4 +303,24 @@ export interface MobileBgPublishJob {
   started_at: string | null;
   finished_at: string | null;
   updated_at: string;
+  // Written only by the OFFICIAL_API worker. The id is kept on the job once the
+  // listing exists, so a failed picture step can be retried without publishing a
+  // second listing.
+  listing_id: string | null;
+  // One entry per API call: step, endpoint, HTTP status, Mobile.bg's own status
+  // and a redacted excerpt of the response. Never holds a token or a password.
+  api_trace: MobileBgApiTraceEntry[] | null;
+}
+
+export interface MobileBgApiTraceEntry {
+  step: string;
+  label: string;
+  method: string;
+  path: string;
+  http_status: number | null;
+  api_status: string | null;
+  api_msg: string | null;
+  response_excerpt: string | null;
+  ok: boolean;
+  at: string;
 }
