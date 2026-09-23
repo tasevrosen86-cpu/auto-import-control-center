@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, CheckCircle2, ExternalLink, FileText, Image, ImageIcon, Loader2, MonitorUp, RefreshCw, Save } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronRight, ExternalLink, Eye, Image, ImageIcon, Loader2, MonitorUp, RefreshCw, Save } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import { formatDateTime } from '@/lib/format';
-import { EXTRA_GROUPS, MOBILE_BG_FIELD_MAP } from '@/lib/mobile_bg_field_map';
+import { timeAgo } from '@/lib/format';
+import { Badge } from '@/components/Badge';
+import { DRAFT_STATUS_COLORS, DRAFT_STATUS_LABELS_BG, EXTRA_GROUPS, MOBILE_BG_FIELD_MAP } from '@/lib/mobile_bg_field_map';
 import { PublicationAgentPanel } from '@/components/PublicationAgentPanel';
 
 type Job = { id:string; draft_id:string; source_url:string; status:'QUEUED'|'RUNNING'|'COMPLETED'|'FAILED'; error_message:string|null; created_at:string };
@@ -14,6 +15,10 @@ type Draft = DraftRow & { fields:Field[]; images:DraftImage[]; extras:Extra[] };
 type PublishJob={id:string;draft_id:string;status:string;error_message:string|null;public_url:string|null;created_at:string};
 const labels:Record<string,string>={category:'Категория',make:'Марка',model:'Модел',title:'Заглавие',modification:'Модификация',year:'Година',month:'Месец',mileage:'Пробег',fuel:'Гориво',gearbox:'Скоростна кутия',power:'Мощност',displacement:'Кубатура',color:'Цвят',condition:'Състояние',drivetrain:'Задвижване',vin:'VIN',location:'Местоположение',seller_name:'Продавач',phone:'Телефон',final_description:'Описание'};
 const required=['category','make','model','year','month','mileage','fuel','gearbox','location'];
+// Статусът READY се слага само от prepare-publication-draft и го няма в общата
+// карта, която описва „Обяви“. Пазим го тук, за да не пипаме чуждия речник.
+const publicationStatusLabel=(value:string)=>DRAFT_STATUS_LABELS_BG[value]||(value==='READY'?'Готова за публикуване':value);
+const publicationStatusColor=(value:string)=>DRAFT_STATUS_COLORS[value]||(value==='READY'?'emerald':'slate');
 
 export function Publications(){
   const [url,setUrl]=useState('');
@@ -22,6 +27,9 @@ export function Publications(){
   const [drafts,setDrafts]=useState<Draft[]>([]);
   const [publishJobs,setPublishJobs]=useState<PublishJob[]>([]);
   const [selectedId,setSelectedId]=useState('');
+  // Отделен от selectedId: load() продължава да поддържа избора, а този флаг
+  // само решава дали списъкът или черновата е на екрана.
+  const [detailOpen,setDetailOpen]=useState(false);
   const [price,setPrice]=useState('');
   const [busy,setBusy]=useState(false);
   const [notice,setNotice]=useState('');
@@ -54,6 +62,9 @@ export function Publications(){
 
   useEffect(()=>{void load();const timer=window.setInterval(()=>void load(),8000);return()=>window.clearInterval(timer);},[load]);
   const draft=drafts.find(item=>item.id===selectedId);
+  // Същият избор като досега, само че вече не се прави през падащо меню.
+  const openDraft=(id:string)=>{setSelectedId(id);setPrice('');setDetailOpen(true)};
+  const backToList=()=>setDetailOpen(false);
   const field=(key:string)=>draft?.fields.find(item=>item.field_key===key)?.value?.trim()||'';
   const missing=required.filter(key=>!field(key));
   const selectedImages=draft?.images.filter(image=>image.is_selected).length||0;
@@ -150,17 +161,96 @@ export function Publications(){
   const status=(value:string)=>value==='COMPLETED'?'Готово':value==='RUNNING'?'Извличане':value==='FAILED'?'Грешка':value==='WAITING_SESSION'?'Нужен вход':value==='WAITING_CONFIRMATION'?'Чака потвърждение':'На опашка';
 
   return <div className="space-y-4">
-    <header className="flex items-end justify-between gap-3"><div><h1 className="text-lg font-extrabold text-slate-800">Публикации</h1><p className="mt-1 text-xs text-slate-500">Самостоятелен URL importer. Създава пълни чернови по същия механизъм като „Обяви“, но в отделна база.</p></div><div className="flex shrink-0 gap-2"><button disabled={busy} onClick={()=>void openMobileBrowser()} className="flex items-center gap-1.5 rounded-md bg-slate-800 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"><MonitorUp className="h-3.5 w-3.5"/>Влез в Mobile.bg</button><button onClick={()=>void load()} className="flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600"><RefreshCw className="h-3.5 w-3.5"/>Опресни</button></div></header>
+    <PublicationHeader onRefresh={()=>void load()} onOpenBrowser={()=>void openMobileBrowser()} busy={busy}/>
     {notice&&<div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">{notice}</div>}
     {error&&<div className="flex gap-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800"><AlertTriangle className="h-4 w-4 shrink-0"/>{error}</div>}
-    <section className="rounded-lg border border-slate-200 bg-white"><header className="border-b border-slate-100 px-3 py-3"><h2 className="text-sm font-bold text-slate-700">1. Импортирай нов URL</h2><p className="mt-1 text-[11px] text-slate-500">Поставете директен линк към AutoTrader Canada или Encar. Създава се нова чернова само за „Публикации“.</p></header><div className="grid gap-2 p-3 sm:grid-cols-[1fr_auto]"><input value={url} onChange={e=>setUrl(e.target.value)} placeholder="https://www.autotrader.ca/offers/... или encar.com/..." className="h-10 rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-blue-400"/><button disabled={busy} onClick={()=>void importUrl()} className="flex h-10 items-center justify-center gap-1.5 rounded-md bg-blue-600 px-4 text-xs font-bold text-white disabled:opacity-50">{busy&&<Loader2 className="h-3.5 w-3.5 animate-spin"/>}{copyFromAds?'Копирай пълна чернова':'Извлечи данни и снимки'}</button></div><label className="mx-3 mb-3 flex items-start gap-2 text-[11px] text-slate-600"><input type="checkbox" checked={copyFromAds} onChange={e=>setCopyFromAds(e.target.checked)} className="mt-0.5"/><span>За тест: копирай пълната чернова за същия URL от „Обяви“ — полета, снимки и екстри се записват като нова независима чернова тук.</span></label>
-      {jobs.length>0&&<div className="border-t border-slate-100 p-3"><div className="mb-2 text-xs font-bold text-slate-700">Собствена опашка</div>{jobs.slice(0,5).map(job=><div key={job.id} className="flex items-center justify-between gap-2 border-t border-slate-50 py-2 text-[11px]"><a className="truncate text-blue-700 hover:underline" href={job.source_url} target="_blank" rel="noreferrer">{job.source_url}</a><span className="shrink-0 font-semibold text-slate-600">{status(job.status)}</span>{job.error_message&&<span className="text-rose-700">Грешка при извличане</span>}</div>)}</div>}
-    </section>
-    <section className="rounded-lg border border-slate-200 bg-white"><header className="border-b border-slate-100 px-3 py-3"><h2 className="flex items-center gap-1.5 text-sm font-bold text-slate-700"><FileText className="h-4 w-4"/>2. Провери и редактирай черновата</h2><p className="mt-1 text-[11px] text-slate-500">Пълният редактор от „Обяви“: виждаш всички снимки, избираш ги и добавяш/махаш екстри ръчно.</p></header>
-      {!drafts.length?<p className="p-5 text-center text-xs text-slate-400">Още няма извлечена чернова.</p>:<><div className="p-3"><select value={selectedId} onChange={e=>{setSelectedId(e.target.value);setPrice('')}} className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm">{drafts.map(item=><option key={item.id} value={item.id}>{item.title||item.source_url||'URL чернова'} · {formatDateTime(item.created_at)}</option>)}</select></div>{draft&&<PublicationDraftEditor draft={draft} field={field} missing={missing} selectedImages={selectedImages} price={price} setPrice={setPrice} busy={busy||savingEditor} currentPublish={currentPublish} onPrepare={prepare} onPublish={queuePublish} onEdit={editDraft} status={status}/>}</>}
-    </section>
+    <PublicationImportSection url={url} setUrl={setUrl} copyFromAds={copyFromAds} setCopyFromAds={setCopyFromAds} jobs={jobs} busy={busy} onImport={()=>void importUrl()} status={status}/>
+    {detailOpen&&draft
+      ? <PublicationDraftView draft={draft} field={field} missing={missing} selectedImages={selectedImages} price={price} setPrice={setPrice} busy={busy||savingEditor} currentPublish={currentPublish} onPrepare={prepare} onPublish={queuePublish} onEdit={editDraft} status={status} onBack={backToList}/>
+      : <PublicationDraftList drafts={drafts} publishJobs={publishJobs} onOpen={openDraft}/>}
     <PublicationAgentPanel draftTitle={draft?.title||undefined}/>
   </div>;
+}
+
+function PublicationHeader({onRefresh,onOpenBrowser,busy}:{onRefresh:()=>void;onOpenBrowser:()=>void;busy:boolean}){
+  return <header className="flex flex-wrap items-center justify-between gap-2">
+    <div>
+      <h2 className="text-[20px] font-extrabold tracking-tight text-[#172541]">Публикации</h2>
+      <p className="mt-0.5 text-sm text-slate-500">Чернови за Mobile.bg — AUTO IMPORT CONTROL CENTER</p>
+    </div>
+    <div className="flex items-center gap-2">
+      <button disabled={busy} onClick={onOpenBrowser} className="flex items-center gap-1.5 rounded-md bg-slate-800 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"><MonitorUp className="h-3.5 w-3.5"/>Влез в Mobile.bg</button>
+      <button onClick={onRefresh} className="flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"><RefreshCw className="h-3.5 w-3.5"/>Опресни</button>
+    </div>
+  </header>;
+}
+
+function PublicationImportSection({url,setUrl,copyFromAds,setCopyFromAds,jobs,busy,onImport,status}:{url:string;setUrl:(value:string)=>void;copyFromAds:boolean;setCopyFromAds:(value:boolean)=>void;jobs:Job[];busy:boolean;onImport:()=>void;status:(value:string)=>string}){
+  return <section className="rounded-md border border-slate-200 bg-white shadow-sm"><header className="border-b border-slate-100 px-3 py-3"><h3 className="text-sm font-bold text-slate-700">1. Импортирай нов URL</h3><p className="mt-1 text-[11px] text-slate-500">Поставете директен линк към AutoTrader Canada или Encar. Създава се нова чернова само за „Публикации“.</p></header><div className="grid gap-2 p-3 sm:grid-cols-[1fr_auto]"><input value={url} onChange={e=>setUrl(e.target.value)} placeholder="https://www.autotrader.ca/offers/... или encar.com/..." className="h-10 rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-blue-400"/><button disabled={busy} onClick={onImport} className="flex h-10 items-center justify-center gap-1.5 rounded-md bg-blue-600 px-4 text-xs font-bold text-white disabled:opacity-50">{busy&&<Loader2 className="h-3.5 w-3.5 animate-spin"/>}{copyFromAds?'Копирай пълна чернова':'Извлечи данни и снимки'}</button></div><label className="mx-3 mb-3 flex items-start gap-2 text-[11px] text-slate-600"><input type="checkbox" checked={copyFromAds} onChange={e=>setCopyFromAds(e.target.checked)} className="mt-0.5"/><span>За тест: копирай пълната чернова за същия URL от „Обяви“ — полета, снимки и екстри се записват като нова независима чернова тук.</span></label>
+    {jobs.length>0&&<div className="border-t border-slate-100 p-3"><div className="mb-2 text-xs font-bold text-slate-700">Собствена опашка</div>{jobs.slice(0,5).map(job=><div key={job.id} className="flex items-center justify-between gap-2 border-t border-slate-50 py-2 text-[11px]"><a className="truncate text-blue-700 hover:underline" href={job.source_url} target="_blank" rel="noreferrer">{job.source_url}</a><span className="shrink-0 font-semibold text-slate-600">{status(job.status)}</span>{job.error_message&&<span className="text-rose-700">Грешка при извличане</span>}</div>)}</div>}
+  </section>;
+}
+
+function PublicationDraftList({drafts,publishJobs,onOpen}:{drafts:Draft[];publishJobs:PublishJob[];onOpen:(id:string)=>void}){
+  const publishedByDraft=new Map(publishJobs.filter(job=>job.public_url).map(job=>[job.draft_id,job.public_url!]));
+  return <div className="overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm">
+    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-3 py-2">
+      <h3 className="text-sm font-bold text-slate-700">Чернови за публикуване</h3>
+      <span className="text-[10px] text-slate-500">Отвори чернова, за да видиш данните и да я подготвиш</span>
+    </div>
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[700px] text-left text-[11px]">
+        <thead>
+          <tr className="border-b border-slate-200 bg-[#edf3f9] text-[9px] font-extrabold text-slate-700">
+            <th className="px-2 py-2">Заглавие / Източник</th>
+            <th className="px-2 py-1 text-center">Статус</th>
+            <th className="px-2 py-1 text-center">Създадена</th>
+            <th className="px-2 py-1 text-center">Публикувана</th>
+            <th className="px-2 py-1 text-center">Действие</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {drafts.length===0
+            ? <tr><td colSpan={5} className="py-12 text-center text-slate-400">Още няма извлечена чернова.</td></tr>
+            : drafts.map(item=><tr key={item.id} className="cursor-pointer transition hover:bg-blue-50/60" onClick={()=>onOpen(item.id)}>
+              <td className="px-2 py-2">
+                <p className="truncate font-bold text-slate-800">{item.title||`Чернова ${item.id.slice(0,8)}`}</p>
+                <p className="truncate text-slate-500">{item.source_url||'—'}</p>
+              </td>
+              <td className="px-2 py-1 text-center">
+                <Badge color={publicationStatusColor(item.status)}>{publicationStatusLabel(item.status)}</Badge>
+              </td>
+              <td className="px-2 py-1 text-center text-slate-500">{timeAgo(item.created_at)}</td>
+              <td className="px-2 py-1 text-center">
+                {publishedByDraft.has(item.id)
+                  ? <a href={publishedByDraft.get(item.id)} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} className="text-blue-600 hover:underline">Линк</a>
+                  : <span className="text-slate-300">—</span>}
+              </td>
+              <td className="px-2 py-1 text-center">
+                <button onClick={e=>{e.stopPropagation();onOpen(item.id)}} className="rounded border border-blue-200 bg-blue-50 px-2 py-1 font-bold text-blue-600 hover:bg-blue-100"><Eye className="inline h-3 w-3"/> Отвори</button>
+              </td>
+            </tr>)}
+        </tbody>
+      </table>
+    </div>
+  </div>;
+}
+
+function PublicationDraftView(props:{draft:Draft;field:(key:string)=>string;missing:string[];selectedImages:number;price:string;setPrice:(value:string)=>void;busy:boolean;currentPublish:PublishJob|undefined;onPrepare:()=>Promise<void>;onPublish:()=>Promise<void>;onEdit:(action:string,payload:Record<string,unknown>)=>Promise<void>;status:(value:string)=>string;onBack:()=>void}){
+  const {draft,onBack,...rest}=props;
+  return <section className="rounded-md border border-slate-200 bg-white shadow-sm">
+    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-3 py-3">
+      <div className="flex items-center gap-3">
+        <button onClick={onBack} className="flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"><ChevronRight className="h-3.5 w-3.5 rotate-180"/> Назад</button>
+        <div>
+          <h2 className="text-[20px] font-extrabold tracking-tight text-[#172541]">{draft.title||`Чернова ${draft.id.slice(0,8)}`}</h2>
+          <p className="text-xs text-slate-500">{draft.source_url||'—'}</p>
+        </div>
+      </div>
+      <Badge color={publicationStatusColor(draft.status)}>{publicationStatusLabel(draft.status)}</Badge>
+    </div>
+    <PublicationDraftEditor draft={draft} {...rest}/>
+  </section>;
 }
 
 function PublicationDraftEditor({draft,field,missing,selectedImages,price,setPrice,busy,currentPublish,onPrepare,onPublish,onEdit,status}:{draft:Draft;field:(key:string)=>string;missing:string[];selectedImages:number;price:string;setPrice:(value:string)=>void;busy:boolean;currentPublish:PublishJob|undefined;onPrepare:()=>Promise<void>;onPublish:()=>Promise<void>;onEdit:(action:string,payload:Record<string,unknown>)=>Promise<void>;status:(value:string)=>string}){
