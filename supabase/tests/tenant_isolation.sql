@@ -395,6 +395,35 @@ begin
     raise exception 'the draft for the second company is missing';
   end if;
 
+  -- The owner imports links the same way a company user does, and holds no
+  -- company. Refusing them here stopped the URL path outright, before any
+  -- trigger could place the row, so the acting user's role has to answer.
+  select * into v_result from public.queue_source_intake(
+    'https://fem.encar.com/cars/detail/111222333', 'encar', 'fem.encar.com', '111222333',
+    'LINK_FIELD', null, null, current_setting('test.admin')::uuid
+  );
+  if not v_result.was_created then
+    raise exception 'the system administrator could not import a link';
+  end if;
+  if not exists (
+    select 1 from public.mobile_bg_drafts
+    where source_listing_id = '111222333' and company_id = v_royal
+  ) then
+    raise exception 'the administrator''s import did not land in Royal Cars BG';
+  end if;
+
+  -- A broker with no company is still refused. It is the same null company, and
+  -- without this the fallback would quietly place them in Royal Cars BG.
+  begin
+    perform public.queue_source_intake(
+      'https://fem.encar.com/cars/detail/444555666', 'encar', 'fem.encar.com', '444555666',
+      'LINK_FIELD', null, null, current_setting('test.nobody')::uuid
+    );
+    raise exception 'an unplaced broker was allowed to import a link';
+  exception
+    when insufficient_privilege then null;
+  end;
+
   -- The whole function is server-only; a browser client must not reach it.
   if has_function_privilege('authenticated',
       'public.queue_source_intake(text, text, text, text, text, integer, text, uuid)', 'EXECUTE')

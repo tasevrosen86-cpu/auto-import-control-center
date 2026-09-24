@@ -319,12 +319,37 @@ declare
   v_existing_draft_id uuid;
   v_new_draft_id uuid;
   v_title text;
+  v_role text;
+  v_active_company uuid;
+  v_active_count integer;
 begin
   if p_requested_by is null then
     raise exception 'Липсва идентифициран потребител.' using errcode = '42501';
   end if;
 
-  select p.company_id into v_company_id from public.profiles p where p.user_id = p_requested_by;
+  -- The acting user's profile decides the company, never the row being written.
+  -- The role is read from the same lookup because the caller here is the Edge
+  -- Function, running as the service role: `auth.uid()` is null inside this
+  -- call, so `public.is_system_admin()` cannot answer for the person on whose
+  -- behalf it is acting.
+  select p.company_id, p.role into v_company_id, v_role
+  from public.profiles p where p.user_id = p_requested_by;
+
+  -- A system administrator holds no company on purpose, and needs one to import
+  -- a link: the owner works in Royal Cars BG through the same workflow as a
+  -- company user. The single active company answers for them, exactly as the
+  -- insert trigger does. A broker who has not been placed is still refused —
+  -- filing them into whichever company happens to exist would be the silent
+  -- misplacement this migration is about.
+  if v_company_id is null and v_role = 'SYSTEM_ADMIN' then
+    select count(*), min(c.id) into v_active_count, v_active_company
+    from public.companies c
+    where c.status = 'ACTIVE';
+    if v_active_count = 1 then
+      v_company_id := v_active_company;
+    end if;
+  end if;
+
   if v_company_id is null then
     raise exception 'Профилът няма фирма.' using errcode = '42501';
   end if;
