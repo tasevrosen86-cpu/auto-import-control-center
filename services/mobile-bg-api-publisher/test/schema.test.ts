@@ -18,7 +18,64 @@ import { dirname, join } from 'node:path';
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..', '..', '..');
 const migrationsDir = join(repoRoot, 'supabase', 'migrations');
-const sourceFiles = [join(here, '..', 'src', 'index.ts')];
+// Every file whose table access goes through a string. The publisher was the
+// first to break; these edge functions read and write the same mobile_bg_* and
+// publication_* tables, and one of them was already asking mobile_bg_drafts for
+// owner_id, price_eur and currency — columns of publication_drafts.
+const sourceFiles = [
+  join(here, '..', 'src', 'index.ts'),
+  join(here, '..', '..', '..', 'supabase', 'functions', 'queue-publication-url', 'index.ts'),
+  join(here, '..', '..', '..', 'supabase', 'functions', 'ingest-source-listing', 'index.ts'),
+  join(here, '..', '..', '..', 'supabase', 'functions', 'ingest-publication-listing', 'index.ts'),
+];
+
+// Splits a SQL body on commas that are not inside parentheses or quotes, so a
+// table definition is read as one item per column even when several columns
+// share a line (`a text, b text,` is three tokens, not one).
+function splitTopLevel(body: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let quote: string | null = null;
+  let buffer = '';
+  for (const char of body) {
+    if (quote) {
+      buffer += char;
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      buffer += char;
+      continue;
+    }
+    if (char === '(') depth += 1;
+    else if (char === ')') depth = Math.max(0, depth - 1);
+    if (char === ',' && depth === 0) {
+      parts.push(buffer);
+      buffer = '';
+    } else {
+      buffer += char;
+    }
+  }
+  parts.push(buffer);
+  return parts;
+}
+
+// Column names declared by one `CREATE TABLE` body. Each item is either a column
+// (`name type ...`) or a table-level constraint (`primary key (...)`,
+// `constraint x ...`), which has no type after the keyword.
+function columnsFromBody(body: string): string[] {
+  const columns: string[] = [];
+  for (const part of splitTopLevel(body)) {
+    const match = part.match(/^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s+([\s\S]*)$/);
+    if (!match) continue;
+    const [, name, rest] = match;
+    if (/^(primary|unique|foreign|check|constraint|exclude)$/i.test(name)) continue;
+    if (!/^[a-zA-Z]/.test(rest.trim())) continue;
+    columns.push(name);
+  }
+  return columns;
+}
 
 // ---------------------------------------------------------------- schema
 
@@ -36,23 +93,21 @@ async function readSchema(): Promise<Schema> {
     for (const match of sql.matchAll(createRe)) {
       const table = match[1].split('.').pop() as string;
       const columns = schema.get(table) || new Set<string>();
-      for (const line of match[2].split('\n')) {
-        const name = line.trim().match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s+[a-zA-Z]/);
-        // Table-level constraints start a line with one of these words.
-        if (name && !/^(primary|unique|foreign|check|constraint|exclude)$/i.test(name[1])) {
-          columns.add(name[1]);
-        }
-      }
+      for (const name of columnsFromBody(match[2])) columns.add(name);
       schema.set(table, columns);
     }
 
-    // ALTER TABLE name ADD COLUMN [IF NOT EXISTS] col ...
+    // ALTER TABLE name ADD COLUMN [IF NOT EXISTS] col ..., and RENAME COLUMN.
     const alterRe = /ALTER\s+TABLE\s+([a-zA-Z0-9_.]+)([\s\S]*?);/gi;
     for (const match of sql.matchAll(alterRe)) {
       const table = match[1].split('.').pop() as string;
       const columns = schema.get(table) || new Set<string>();
       for (const add of match[2].matchAll(/ADD\s+COLUMN(?:\s+IF\s+NOT\s+EXISTS)?\s+([a-zA-Z_][a-zA-Z0-9_]*)/gi)) {
         columns.add(add[1]);
+      }
+      for (const rename of match[2].matchAll(/RENAME\s+COLUMN\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+TO\s+([a-zA-Z_][a-zA-Z0-9_]*)/gi)) {
+        columns.delete(rename[1]);
+        columns.add(rename[2]);
       }
       schema.set(table, columns);
     }

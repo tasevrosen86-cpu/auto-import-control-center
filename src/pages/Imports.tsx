@@ -895,7 +895,6 @@ function ImagesSection({ images, onUpdate }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const selected = images.filter(image => image.is_selected);
-  const overLimit = selected.length > MOBILE_BG_MAX_PHOTOS;
 
   async function updateImage(id: string, changes: Partial<MobileBgDraftImage>) {
     setBusy(true);
@@ -912,7 +911,10 @@ function ImagesSection({ images, onUpdate }: {
   }
 
   async function toggleSelection(image: MobileBgDraftImage) {
-    if (!image.is_selected && overLimit) {
+    // The count before the click. Only a photo that is currently unselected adds
+    // one, so `>= MAX` is the correct guard for taking the seventeenth: the
+    // draft already holds the maximum and another may not be added.
+    if (!image.is_selected && selected.length >= MOBILE_BG_MAX_PHOTOS) {
       setError(`Mobile.bg приема до ${MOBILE_BG_MAX_PHOTOS} снимки. Откачи една, преди да избереш нова.`);
       return;
     }
@@ -931,11 +933,11 @@ function ImagesSection({ images, onUpdate }: {
     <div className="space-y-3">
       {error && <div className="rounded border border-rose-200 bg-rose-50 px-2 py-1.5 text-[11px] text-rose-700">{error}</div>}
       <div className="flex flex-wrap items-center gap-3 rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-[11px]">
-        <span className="font-bold text-slate-700">Избрани: <span className={overLimit ? 'text-rose-600' : 'text-emerald-600'}>{selected.length}</span> / {MOBILE_BG_MAX_PHOTOS}</span>
+        <span className="font-bold text-slate-700">Избрани: <span className="text-emerald-600">{selected.length}</span> / {MOBILE_BG_MAX_PHOTOS}</span>
         <span className="text-slate-500">Извлечени от източника: {images.length}</span>
         <button onClick={selectFirstAsMain} disabled={busy} className="rounded border border-slate-300 bg-white px-2 py-0.5 font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50">Първата като основна</button>
       </div>
-      {overLimit && <div className="rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">Маркирани са повече от {MOBILE_BG_MAX_PHOTOS} снимки. При публикуване ще се качат само първите {MOBILE_BG_MAX_PHOTOS} по подредба.</div>}
+      {images.length > MOBILE_BG_MAX_PHOTOS && <div className="rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-[11px] text-slate-600">Изтеглени са {images.length} снимки. Само {MOBILE_BG_MAX_PHOTOS} могат да се публикуват — първите {MOBILE_BG_MAX_PHOTOS} са маркирани. Откачи една, за да избереш друга.</div>}
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
         {images.map(image => (
           <div key={image.id} className={`overflow-hidden rounded border ${image.is_selected ? 'border-emerald-300 ring-1 ring-emerald-200' : 'border-slate-200'} bg-white`}>

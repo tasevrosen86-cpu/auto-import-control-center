@@ -74,10 +74,16 @@ export default {
     }
 
     if (copyExistingDraft) {
+      // mobile_bg_drafts is not user-scoped (it carries company_id, not
+      // owner_id), and this function is already restricted to the admin address,
+      // so the source draft is matched by URL alone. Its price and currency live
+      // in mobile_bg_draft_fields, not in header columns: they are copied into
+      // publication_draft_fields below, exactly as the direct URL import leaves
+      // them. publication_drafts.price_eur and .currency therefore stay at their
+      // defaults, which is what the import path does too.
       const { data: sourceDraft, error: sourceDraftError } = await ctx.supabaseAdmin
         .from('mobile_bg_drafts')
-        .select('id,title,status,source_type,source_url,source_listing_id,source_vin,source_price_eur,price_eur,currency,source_domain,extraction_status')
-        .eq('owner_id', ctx.userClaims.id)
+        .select('id,title,status,source_type,source_url,source_listing_id,source_vin,source_price_eur,source_domain,extraction_status')
         .eq('source_url', source.source_url)
         .order('updated_at', { ascending: false })
         .limit(1)
@@ -96,7 +102,7 @@ export default {
         owner_id: ctx.userClaims.id, title: sourceDraft.title, status: sourceDraft.status === 'ERROR' ? 'ERROR' : (sourceDraft.status === 'READY' || sourceDraft.status === 'APPROVED' ? 'READY_FOR_REVIEW' : 'DRAFT'),
         source_type: sourceDraft.source_type || source.source_type, source_url: source.source_url,
         source_listing_id: sourceDraft.source_listing_id || source.source_listing_id, source_vin: sourceDraft.source_vin,
-        source_price_eur: sourceDraft.source_price_eur, price_eur: sourceDraft.price_eur, currency: sourceDraft.currency || 'EUR',
+        source_price_eur: sourceDraft.source_price_eur,
         intake_origin: 'ADS_DRAFT_COPY', extraction_status: sourceDraft.extraction_status || 'COMPLETED',
         source_domain: sourceDraft.source_domain || source.source_domain, created_by: 'Publication copy from Ads',
       }).select('id').single();

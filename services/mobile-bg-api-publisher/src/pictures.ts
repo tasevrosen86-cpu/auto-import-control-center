@@ -121,10 +121,18 @@ export async function preparePictures(
     keepExisting = false,
   } = options;
 
+  // The cap is enforced on the draft by a database trigger, so the selection is
+  // already at most 17 and this slice is a guard against a draft that predates
+  // it. It is taken in display_order — the order the broker sees and the order
+  // the screen calls "the first 17" — so the photo dropped here is the same one
+  // the screen would drop. Only after the set is settled is the cover moved to
+  // the front, because that changes the order sent, not which photos are sent.
   const eligible = images
     .filter(image => image.is_selected)
-    .sort((a, b) => Number(b.is_main) - Number(a.is_main) || a.display_order - b.display_order);
-  const selected = eligible.slice(0, maxPhotos);
+    .sort((a, b) => a.display_order - b.display_order);
+  const selected = eligible
+    .slice(0, maxPhotos)
+    .sort((a, b) => Number(b.is_main) - Number(a.is_main));
 
   const skipped: SkippedPicture[] = [];
   if (eligible.length > maxPhotos) {

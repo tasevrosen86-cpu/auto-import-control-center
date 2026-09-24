@@ -238,15 +238,21 @@ Deno.serve(async (request) => {
     const imageRows = images
       .map((image, index) => ({
         draft_id: draftId, source_url: asString(image.source_url || image.url), local_path: asString(image.local_path),
-        // Mobile.bg caps a listing at 17 photos. Every unique source photo is
-        // stored so the broker can swap picks, but only the first 17 start
-        // selected, otherwise the draft would not be publishable as imported.
-        converted_jpg: image.converted_jpg === true, is_selected: image.selected === true || (image.selected !== false && index < MOBILE_BG_MAX_PHOTOS),
+        converted_jpg: image.converted_jpg === true, is_selected: image.selected !== false,
         is_main: image.is_main === true || index === 0, display_order: Number(image.display_order ?? index + 1),
         real_car_photo_check: image.real_car_photo_check === true, processing_status: asString(image.processing_status) || 'pending',
         size_bytes: Number.isFinite(Number(image.size_bytes)) ? Number(image.size_bytes) : null,
       }))
       .filter(image => image.source_url);
+    // Mobile.bg caps a listing at 17 photos. Every unique source photo is stored
+    // so the broker can swap picks, but only the first 17 by display_order start
+    // selected. Deciding it by position after ordering — rather than by the order
+    // the payload happened to list them in, which the previous check used — means
+    // the selection matches what the screen and the publisher call "the first 17".
+    const ordered = [...imageRows].sort((a, b) => a.display_order - b.display_order);
+    ordered.forEach((image, position) => {
+      if (position >= MOBILE_BG_MAX_PHOTOS) image.is_selected = false;
+    });
     if (imageRows.length) {
       const { error } = await db.from('mobile_bg_draft_images').insert(imageRows);
       if (error) return response({ error: error.message }, 500);

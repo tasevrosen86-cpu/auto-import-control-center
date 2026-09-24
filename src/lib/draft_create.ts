@@ -5,6 +5,11 @@ import { supabase } from '@/lib/supabase';
 
 export type IntakeOrigin = 'LINK_FIELD' | 'BROKER_LINK';
 
+// Mobile.bg accepts at most 17 photos per listing. The cap is also enforced on
+// mobile_bg_draft_images by a database trigger, so this is only what the broker
+// should see by default, not the last line of defence.
+const MOBILE_BG_MAX_PHOTOS = 17;
+
 export type CreatedSourceDraft = {
   id: string;
   sourceType: IntakeSourceType;
@@ -65,12 +70,17 @@ export async function createDraftFromCatalog(seed: DraftSeed): Promise<string> {
   }
 
   if (seed.images?.length) {
-    const imageRows = seed.images.map(image => ({
+    // Every downloaded photo is kept so the broker can swap picks, but only the
+    // first 17 start selected: Mobile.bg accepts no more than that, and a draft
+    // whose selection already exceeds it would be silently trimmed at publish
+    // instead of in front of the broker.
+    const ordered = [...seed.images].sort((a, b) => a.display_order - b.display_order);
+    const imageRows = ordered.map((image, index) => ({
       draft_id: draft.id,
       source_url: image.source_url,
       local_path: null,
       converted_jpg: false,
-      is_selected: true,
+      is_selected: index < MOBILE_BG_MAX_PHOTOS,
       is_main: image.is_main,
       display_order: image.display_order,
       real_car_photo_check: false,
