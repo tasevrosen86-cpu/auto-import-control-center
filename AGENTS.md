@@ -223,6 +223,35 @@ When adding a derived field here, require the value to follow its key and leave
 the field empty when the source has none. An empty field is visible and the
 broker fills it; a plausible wrong number silently becomes a published listing.
 
+## Deleting a draft for good
+
+«Изтрий» on a draft removes the row and every child row (fields, extras, images,
+action log, dedup checks, intake job, publish job) through `ON DELETE CASCADE`,
+so one `DELETE` on `mobile_bg_drafts` is the whole database side. Two things do
+not cascade and are handled explicitly:
+
+* `mobile_bg_dedup_checks.matched_draft_id` is a plain reference, not a foreign
+  key. Rows *other* drafts hold against this one are cleared, never deleted.
+* The picture directory the API publisher wrote lives on the VPS disk, not in
+  the database. `purge_mobile_bg_draft` queues its removal in
+  `mobile_bg_purge_jobs`; `services/mobile-bg-cleanup` does the removal.
+
+The database function only queues the file work, so a deletion succeeds even
+when no cleanup worker is running — the files then linger until one is. The
+function refuses to delete a draft with a `RUNNING` publish job, because that
+job is mid-listing and would resurrect the draft or leave it half-published.
+
+`purge_mobile_bg_draft` writes a durable `audit_log` row (`action = 'PURGE'`),
+not a `mobile_bg_draft_action_log` row: the latter is cascade-deleted with the
+draft and would vanish at the moment it is needed.
+
+`supabase/tests/purge_draft.sql` covers this against a real Postgres. It runs in
+one transaction it rolls back, so it is safe on a database that holds data:
+
+```bash
+psql -d <db> -f supabase/tests/purge_draft.sql
+```
+
 ## Applying migrations
 
 There is no Supabase CLI here and no DB credentials in the agent environment.

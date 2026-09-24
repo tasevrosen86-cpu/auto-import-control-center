@@ -1,0 +1,17 @@
+{
+  "name": "aicc-mobile-bg-cleanup",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "run-once": "tsx src/index.ts",
+    "test": "tsx test/cleanup.test.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.57.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}
