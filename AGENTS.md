@@ -839,3 +839,38 @@ paths as configuration (`BROWSER_CDP_PATH`, `BROWSER_UPLOAD_PATH`) instead of
 hardcoding a guess, and `send()` is the single place to change once the real
 relay is known. If the gateway does not relay arbitrary CDP methods, that one
 function is rewritten; `form.mjs` stays as it is.
+
+## Migrations are applied by hand, and the SQL Editor is not transactional
+
+`supabase/migrations/` is applied by pasting each file into the Supabase SQL
+Editor, not by `supabase db push`. The editor runs statements one at a time and
+keeps what succeeded, so a migration that fails part-way leaves a half-applied
+database behind — and re-running it meets its own leavings.
+
+This happened: `20260925130000_royal_cars_tenant_isolation.sql` failed with
+`42883: function public.current_company_id() does not exist`, because an earlier
+attempt had been interrupted and the helper was dropped but not yet recreated.
+
+Two rules follow, and both matter more here than in a repository that applies
+migrations atomically:
+
+* Never rely on a migration being all-or-nothing. Write every statement so that
+  running the file twice, or after a partial run, ends in the same state:
+  `if not exists`, `on conflict do nothing`, `create or replace`, and an explicit
+  `drop ... if exists` before anything that has no `if not exists` form (policies,
+  triggers, and functions whose signature is changing).
+* Define the helper functions a migration depends on *inside that migration*,
+  above their first use, rather than assuming an earlier file left them. A
+  migration that can only run on a pristine database is a migration that cannot
+  be recovered.
+
+`create or replace function f()` is also the only form that omits the argument
+list; `create or replace function f(uuid)` creates a *second* function, and a
+zero-argument call then resolves to neither, or to the wrong one. When adding a
+defaulted argument, drop the old signature explicitly — Postgres matches
+`create or replace` on the full argument list.
+
+`scripts/parse_migrations.py` parses every migration with `pglast` (libpg_query,
+the parser Postgres itself uses). It catches syntax, not semantics, but a syntax
+error found before the paste is worth it: a paste into production has no undo.
+It needs `pip install pglast`, and the interpreter must be the one that has it.

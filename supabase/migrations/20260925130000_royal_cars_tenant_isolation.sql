@@ -13,6 +13,231 @@
 -- is switched on once the workers carry the service-role key.
 
 -- ============================================================
+-- 0. Repair the helper layer before anything depends on it
+-- ============================================================
+-- This migration failed once, on a production database, with:
+--
+--   ERROR: 42883: function public.current_company_id() does not exist
+--
+-- That single error has one likely cause and one dangerous one, and both are
+-- handled here rather than guessed at.
+--
+-- The likely cause is a partial earlier attempt. `supabase db push` runs a
+-- migration inside a transaction, but the SQL Editor does not: statement by
+-- statement, and a failure part-way leaves everything before it committed. Every
+-- `create or replace function` in this migration is a plain statement, so an
+-- interrupted paste can leave `current_company_id` dropped and not yet recreated.
+-- The very next statement that mentions it — `alter column ... set default
+-- public.current_company_id()` — then fails exactly as reported, even though
+-- nothing was wrong with the migration itself.
+--
+-- The dangerous cause is a duplicate. `create or replace function f()` is the
+-- only signature Postgres will let you omit the argument list for. Writing
+-- `create or replace function f(uuid)` — or a stray earlier attempt that did —
+-- leaves TWO functions named `current_company_id`, and a zero-argument call then
+-- resolves to neither:
+--
+--   ERROR: 42725: function public.current_company_id() is not unique
+--
+-- or, if only the wrong-arity one survives, 42883 with a hint. Either way the
+-- default cannot be evaluated.
+--
+-- So the whole helper layer is (re)defined here, before anything uses it. It is
+-- safe to re-run: the tables are `if not exists`, the seed is `on conflict do
+-- nothing`, the functions are `create or replace`, and any same-named function
+-- with the wrong argument count is dropped first. Running this migration twice,
+-- or running it after a half-finished attempt, ends in the same state.
+
+-- Nothing below this point can work without these tables. Fail with a message
+-- that says which one, instead of a syntax-level error forty lines later.
+do $$
+declare
+  missing text;
+begin
+  select string_agg(format('public.%s', t), ', ')
+    into missing
+  from unnest(array[
+    'companies', 'profiles',
+    'mobile_bg_drafts', 'mobile_bg_draft_fields', 'mobile_bg_draft_extras',
+    'mobile_bg_draft_images', 'mobile_bg_draft_action_log', 'mobile_bg_dedup_checks',
+    'mobile_bg_publish_jobs', 'source_listing_jobs'
+  ]) as t
+  where not exists (
+    select 1 from information_schema.tables
+    where table_schema = 'public' and table_name = t
+  );
+
+  if missing is not null then
+    raise exception
+      'Липсват таблици: %. Пуснете предишните миграции и стартирайте тази отново.', missing
+      using errcode = '42P01';
+  end if;
+end $$;
+
+-- Any `current_company_id`, `current_profile_role`, `is_system_admin`,
+-- `is_company_admin` or `can_access_company` with the wrong number of arguments
+-- is a leftover, and a leftover is what makes a call ambiguous. `regprocedure`
+-- prints the signature with its types, which is what `drop` needs.
+do $$
+declare
+  leftover record;
+begin
+  for leftover in
+    select p.oid::regprocedure::text as signature
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and (
+        (p.proname = 'can_access_company' and p.pronargs <> 1)
+        or (p.proname in ('current_company_id', 'current_profile_role',
+                          'is_system_admin', 'is_company_admin')
+            and p.pronargs <> 0)
+      )
+  loop
+    execute format('drop function if exists %s', leftover.signature);
+  end loop;
+end $$;
+
+-- The list of administrator emails, and the reader for it. Recreated rather than
+-- assumed: `is_system_admin()` below consults it, and a database where this table
+-- is missing would silently demote the owner.
+create schema if not exists private;
+
+create table if not exists private.system_admins (
+  email text primary key,
+  note text,
+  created_at timestamptz not null default now()
+);
+
+revoke all on schema private from public;
+revoke all on private.system_admins from public, anon, authenticated;
+
+insert into private.system_admins (email, note)
+values ('tasevrosen86@gmail.com', 'Owner — full access to every company and the master catalog')
+on conflict (email) do nothing;
+
+create or replace function private.is_system_admin_email(candidate text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = private, pg_temp
+as $$
+  select exists (
+    select 1 from private.system_admins a
+    where lower(a.email) = lower(coalesce(candidate, ''))
+  );
+$$;
+
+revoke all on function private.is_system_admin_email(text) from public;
+grant execute on function private.is_system_admin_email(text) to anon, authenticated, service_role;
+
+-- The four helpers, in dependency order.
+create or replace function public.current_profile_role()
+returns text
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  select p.role from public.profiles p where p.user_id = (select auth.uid());
+$$;
+
+create or replace function public.current_company_id()
+returns uuid
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  select p.company_id from public.profiles p where p.user_id = (select auth.uid());
+$$;
+
+create or replace function public.is_system_admin()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, private, pg_temp
+as $$
+  select exists (
+    select 1
+    from public.profiles p
+    where p.user_id = (select auth.uid()) and p.role = 'SYSTEM_ADMIN'
+  ) or private.is_system_admin_email((select auth.jwt() ->> 'email'));
+$$;
+
+create or replace function public.is_company_admin()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  select exists (
+    select 1
+    from public.profiles p
+    where p.user_id = (select auth.uid())
+      and p.role in ('SYSTEM_ADMIN', 'COMPANY_ADMIN')
+  );
+$$;
+
+-- The single tenant predicate, and it is defined once — here — because two
+-- definitions of `can_access_company` that differ only in the `p.status` test
+-- are exactly the kind of drift this migration exists to remove.
+--
+-- The `status = 'ACTIVE'` test is what takes a suspended broker's access away
+-- without touching their login. A system administrator short-circuits before it,
+-- so nothing here narrows the owner's access.
+create or replace function public.can_access_company(target uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, private, pg_temp
+as $$
+  select
+    public.is_system_admin()
+    or exists (
+      select 1
+      from public.profiles p
+      where p.user_id = (select auth.uid())
+        and p.status = 'ACTIVE'
+        and target is not null
+        and p.company_id = target
+    );
+$$;
+
+revoke all on function public.current_profile_role() from public;
+revoke all on function public.current_company_id() from public;
+revoke all on function public.is_system_admin() from public;
+revoke all on function public.is_company_admin() from public;
+revoke all on function public.can_access_company(uuid) from public;
+grant execute on function public.current_profile_role() to anon, authenticated, service_role;
+grant execute on function public.current_company_id() to anon, authenticated, service_role;
+grant execute on function public.is_system_admin() to anon, authenticated, service_role;
+grant execute on function public.is_company_admin() to anon, authenticated, service_role;
+grant execute on function public.can_access_company(uuid) to anon, authenticated, service_role;
+
+-- The owner's own profile. A migration numbered before this one creates it, but
+-- a partial run of that migration can stop before it does, and then the account
+-- that has to administer everything would depend on the email fallback alone.
+-- Re-asserted here: the role is SYSTEM_ADMIN and `company_id` is null, which is
+-- what keeps one account global instead of pinning it to a firm. `company_id`
+-- null is also what the insert trigger and the intake function recognise as "this
+-- caller holds no firm, so ask which one".
+insert into public.profiles (user_id, email, role, company_id, full_name, status)
+select u.id, u.email, 'SYSTEM_ADMIN', null,
+       split_part(coalesce(u.email, ''), '@', 1),
+       'ACTIVE'
+from auth.users u
+where private.is_system_admin_email(u.email)
+on conflict (user_id) do update
+  set role = 'SYSTEM_ADMIN',
+      company_id = null,
+      updated_at = now();
+
+-- ============================================================
 -- 1. Royal Cars BG as the first real tenant
 -- ============================================================
 insert into public.companies (slug, name, status, legal_name, phone)
@@ -513,24 +738,8 @@ grant all on public.profiles to service_role;
 -- ============================================================
 -- 7. The caller must be a real, active profile to use publishing
 -- ============================================================
--- `can_access_company` already refuses a user with no profile. This adds the
--- disabled case, so suspending a broker in `profiles` takes their access away
--- without touching their login.
-create or replace function public.can_access_company(target uuid)
-returns boolean
-language sql
-stable
-security definer
-set search_path = public, private, pg_temp
-as $$
-  select
-    public.is_system_admin()
-    or exists (
-      select 1
-      from public.profiles p
-      where p.user_id = (select auth.uid())
-        and p.status = 'ACTIVE'
-        and target is not null
-        and p.company_id = target
-    );
-$$;
+-- `can_access_company` is defined in section 0, at the top, together with the
+-- other helpers — it has to exist before the `alter column ... set default` in
+-- section 1 can even be parsed, and defining it once is what keeps the
+-- suspended-broker test from drifting away from the predicate the policies use.
+-- This heading is kept so the numbering still reads in order.
