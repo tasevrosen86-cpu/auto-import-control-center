@@ -44,7 +44,7 @@ registered against the account. So:
 
 * a full external URL never works — only a path under the registered domain;
 * the file must be `.jpg` or `.jpeg`, so `.webp` and `.png` sources are
-  re-encoded (via `sharp`, an optional dependency);
+  re-encoded (via `sharp`);
 * one request carries up to 17 paths separated by `~`.
 
 Selected pictures are downloaded into `MOBILE_BG_API_PICTURE_ROOT` (default
@@ -98,6 +98,8 @@ the picture rules.
 3. In «Обяви», open a draft and press **„Публикувай през Mobile.bg API“**.
 4. The **Диагностика** panel opens and follows the run.
 
-To see whether the account may use the API at all, without publishing anything:
-set `mode` to `PREVIEW` on the job row, or watch the `LOGIN` and `FIELDS` steps in
-the panel — both run before anything is created.
+To see whether the account may use the API at all, without publishing anything,
+watch the `LOGIN` and `FIELDS` steps in the panel: both run before anything is
+created. Note that a queued job always runs the full publish — the `mode` column
+is not honoured by this worker yet, so there is no dry-run that stops before
+`advertpub`.

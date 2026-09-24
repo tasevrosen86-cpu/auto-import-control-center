@@ -5,6 +5,7 @@
 // tables already hold, so nothing new is invented to make a test pass.
 
 import { strict as assert } from 'node:assert';
+import { readFile } from 'node:fs/promises';
 import { MobileBgApiClient, findListingId, redactPath, excerptOf, trimTrace } from '../src/client.ts';
 import {
   buildPayload, readCatfields, intersectWithCatfields, splitLocation,
@@ -329,8 +330,8 @@ await check('несъществуващ източник се отчита, бе
   assert.match(batch.skipped[0].reason, /404/);
 });
 
-await check('не-JPEG без конвертор се отчита с причина', async () => {
-  const impl = (async () => new Response(Buffer.from('GIF89a'), { status: 200 })) as unknown as typeof fetch;
+await check('нечетим файл се отчита с причина, без да чупи', async () => {
+  const impl = (async () => new Response(new Uint8Array(Buffer.from('GIF89a')), { status: 200 })) as unknown as typeof fetch;
   const batch = await preparePictures(
     [{ source_url: 'https://example.com/x.gif', local_path: null, is_selected: true, is_main: true, display_order: 1 }],
     { draftId: 'd2', publicRoot: '/tmp/aicc-api-test-root', fetchImpl: impl },
@@ -339,9 +340,41 @@ await check('не-JPEG без конвертор се отчита с причи
   assert.match(batch.skipped[0].reason, /\.jpg/);
 });
 
+// A real .webp is the case that reaches Mobile.bg in practice: the sources store
+// 63 of 509 pictures as webp. Without a converter these are dropped and the
+// listing is published without pictures, so the conversion is asserted here
+// rather than left to whether sharp happens to be installed.
+await check('webp се прекодира в .jpg, когато конверторът е наличен', async () => {
+  let sharpAvailable = true;
+  let webp: Buffer;
+  try {
+    const mod = await import('sharp');
+    const sharp = (mod.default ?? mod) as unknown as (input: unknown) => {
+      webp: () => { toBuffer: () => Promise<Buffer> };
+    };
+    webp = await sharp({ create: { width: 40, height: 30, channels: 3, background: { r: 200, g: 100, b: 50 } } })
+      .webp().toBuffer();
+  } catch {
+    sharpAvailable = false;
+    webp = Buffer.alloc(0);
+  }
+  if (!sharpAvailable) return;
+
+  const impl = (async () => new Response(new Uint8Array(webp), { status: 200 })) as unknown as typeof fetch;
+  const batch = await preparePictures(
+    [{ source_url: 'https://example.com/x.webp', local_path: null, is_selected: true, is_main: true, display_order: 1 }],
+    { draftId: 'd2webp', publicRoot: '/tmp/aicc-api-test-root', fetchImpl: impl },
+  );
+  assert.equal(batch.pictures.length, 1, 'webp трябва да стане снимка, не да се пропусне');
+  assert.equal(batch.pictures[0].filename, 'image-1.jpg');
+  assert.equal(batch.pictures[0].converted_from, 'webp', 'причината за прекодирането се вижда в отчета');
+  const written = await readFile(batch.pictures[0].path.replace(/^\//, '/tmp/aicc-api-test-root/'));
+  assert.ok(written[0] === 0xff && written[1] === 0xd8 && written[2] === 0xff, 'записаното наистина е JPEG');
+});
+
 await check('JPEG се записва с правилно име и път', async () => {
   const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
-  const impl = (async () => new Response(jpeg, { status: 200 })) as unknown as typeof fetch;
+  const impl = (async () => new Response(new Uint8Array(jpeg), { status: 200 })) as unknown as typeof fetch;
   const batch = await preparePictures(
     [{ source_url: 'https://example.com/a.jpg', local_path: null, is_selected: true, is_main: true, display_order: 1 }],
     { draftId: 'd3', publicRoot: '/tmp/aicc-api-test-root', fetchImpl: impl },
@@ -354,7 +387,7 @@ await check('JPEG се записва с правилно име и път', asy
 
 await check('основната снимка е първа', async () => {
   const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
-  const impl = (async () => new Response(jpeg, { status: 200 })) as unknown as typeof fetch;
+  const impl = (async () => new Response(new Uint8Array(jpeg), { status: 200 })) as unknown as typeof fetch;
   const batch = await preparePictures(
     [
       { source_url: 'https://example.com/second.jpg', local_path: null, is_selected: true, is_main: false, display_order: 1 },
