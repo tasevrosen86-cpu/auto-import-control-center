@@ -518,4 +518,97 @@ begin
   end if;
 end $$;
 
+-- ============================================================
+-- Company publications are apart per firm
+-- ============================================================
+-- One master draft, published for two firms. Each firm's row has to be readable
+-- by that firm alone, and neither may reach the other's, which is what makes a
+-- failure on one listing something the other cannot be affected by.
+set local role authenticated;
+
+do $$
+declare
+  v_admin uuid := current_setting('test.admin')::uuid;
+  v_royal uuid := current_setting('test.royal')::uuid;
+  v_other uuid := current_setting('test.other')::uuid;
+  v_royal_broker uuid := current_setting('test.royal_broker')::uuid;
+  v_other_broker uuid := current_setting('test.other_broker')::uuid;
+  v_master uuid;
+  v_visible integer;
+begin
+  -- The master draft is authored by the owner, as a system administrator.
+  perform set_config('request.jwt.claim.sub', v_admin::text, true);
+
+  -- An earlier block suspended Royal Cars's broker to prove a suspended user
+  -- loses access. That is the point of this block's opposite, so the broker is
+  -- put back the way an administrator would restore them.
+  update public.profiles set status = 'ACTIVE' where user_id = v_royal_broker;
+
+  insert into public.mobile_bg_drafts (title, status, source_type, is_master)
+  values ('MASTER CAR', 'DRAFT', 'encar', true)
+  returning id into v_master;
+
+  insert into public.company_publications (master_draft_id, company_id, status, created_by)
+  values (v_master, v_royal, 'PENDING', v_admin),
+         (v_master, v_other, 'PENDING', v_admin);
+
+  update public.company_publications set status = 'PUBLISHED', published_price_eur = 12000
+   where master_draft_id = v_master and company_id = v_royal;
+
+  insert into public.company_publication_links (company_publication_id, company_id, target, external_listing_id)
+  select id, company_id, 'MOBILE_BG', '555000111'
+  from public.company_publications
+  where master_draft_id = v_master and company_id = v_royal;
+
+  -- Royal Cars sees its own publication, with its own outcome and the listing
+  -- identifier the monitoring agent will act on.
+  perform set_config('request.jwt.claim.sub', v_royal_broker::text, true);
+  select count(*) into v_visible
+  from public.company_publications
+  where master_draft_id = v_master and company_id = v_royal and status = 'PUBLISHED';
+  if v_visible <> 1 then
+    raise exception 'Royal Cars cannot read its own publication';
+  end if;
+
+  select count(*) into v_visible from public.company_publication_links;
+  if v_visible <> 1 then
+    raise exception 'Royal Cars sees % publication links, expected its own one', v_visible;
+  end if;
+
+  -- The other firm sees its own row and none of Royal Cars's.
+  perform set_config('request.jwt.claim.sub', v_other_broker::text, true);
+  select count(*) into v_visible from public.company_publications;
+  if v_visible <> 1 then
+    raise exception 'the other firm sees % publications, expected 1', v_visible;
+  end if;
+  select count(*) into v_visible from public.company_publication_links;
+  if v_visible <> 0 then
+    raise exception 'the other firm can see Royal Cars'' listing identifiers';
+  end if;
+
+  -- A firm cannot start a publication of its own: only an administrator may,
+  -- which is what stops a firm publishing for someone else.
+  begin
+    insert into public.company_publications (master_draft_id, company_id, status)
+    values (v_master, v_other, 'PENDING');
+    raise exception 'a firm was allowed to start its own publication';
+  exception
+    when insufficient_privilege then null;
+  end;
+
+  -- The commission is written by an administrator only, so a firm cannot choose
+  -- what it pays.
+  perform set_config('request.jwt.claim.sub', v_royal_broker::text, true);
+  select count(*) into v_visible from public.company_commission_rules;
+  if v_visible <> 1 then
+    raise exception 'the firm cannot read its own commission rule';
+  end if;
+  begin
+    update public.company_commission_rules set commission_value = 1 where company_id = v_royal;
+    raise exception 'a firm was allowed to change its own commission';
+  exception
+    when insufficient_privilege then null;
+  end;
+end $$;
+
 rollback;
