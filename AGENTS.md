@@ -243,9 +243,43 @@ Two rules come out of it:
 
 `services/mobile-bg-api-publisher/test/schema.test.ts` holds the line: it parses
 the migrations as the schema of record and checks every `select`, `insert` and
-`update` column in the worker against it, so a column that does not exist fails
-`npm test` instead of a live publish. Verified by mutation — putting `price_eur`
-back makes it fail.
+`update` column in the worker **and in the three edge functions** against it, so
+a column that does not exist fails `npm test` instead of a live publish. Verified
+by mutation — putting `price_eur` back makes it fail.
+
+Two failures it was written to catch, and the reasons it missed the second at
+first:
+
+* The publisher read `mobile_bg_drafts.price_eur`. Caught.
+* `queue-publication-url` read `owner_id`, `price_eur` and `currency` from
+  `mobile_bg_drafts` — all columns of `publication_drafts`. Missed, because the
+  test read only the first column on each line of a table definition and only
+  one source file. Both gaps are closed. All three columns answer HTTP 400 on the
+  live table, which is the cheap way to confirm a name before trusting a scan.
+
+## Photo cap: 17 per Mobile.bg listing
+
+Mobile.bg accepts at most **17 photos** per listing. The rule is enforced on
+`mobile_bg_draft_images` by the `trg_mobile_bg_image_cap_*` triggers from
+migration `20260924150000_mobile_bg_image_selection_cap.sql`, not in the
+publishers, so the broker never sees a selection the publisher would trim.
+
+* The 17 kept are the smallest by `(display_order, id)` — the same 17 the screen
+  and the publisher call "the first 17". `is_main` does not jump the cap.
+* The triggers are **statement-level**. A row-level trigger decides each row
+  against the rows already written, so one multi-row `INSERT` gives different
+  answers depending on the order the rows arrive in: 22 rows ascending pass,
+  22 rows descending leave all 22 selected. Never make the cap row-level again.
+* Photos are never deleted and `display_order` is never rewritten. Extras stay
+  and can be swapped in.
+* Every writer must keep all photos and select by position after sorting by
+  `display_order`: `draft_create.ts`, `ingest-source-listing`, `Imports.tsx`.
+  `pictures.ts` cuts in `display_order` **before** moving the cover to the front;
+  moving the cover first lets it evict a photo the screen shows as selected.
+* The UI guard is `selected.length >= 17`, not `> 17`.
+
+Integration test: `psql -d <db> -f supabase/tests/image_selection_cap.sql`
+(10 checks, rolled back).
 
 ## Deleting a draft for good
 
