@@ -8,9 +8,9 @@
 --
 -- `anon` is deliberately left as it was. The Mobile.bg workers run with the
 -- public key on the VPS (see `deploy-vps.yml`), so tightening `anon` here would
--- stop publishing the moment it was applied. The follow-up migration
--- `20260925140000_royal_cars_close_anon.sql` closes that gap and is switched on
--- once the workers carry the service-role key.
+-- stop publishing the moment it was applied. The follow-up migration in
+-- `supabase/manual/20260925150000_royal_cars_close_anon.sql` closes that gap and
+-- is switched on once the workers carry the service-role key.
 
 -- ============================================================
 -- 1. Royal Cars BG as the first real tenant
