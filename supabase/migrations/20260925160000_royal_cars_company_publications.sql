@@ -49,6 +49,15 @@ create table if not exists public.company_publication_profiles (
   -- publishes with the master draft's description unchanged.
   description_template text,
   extra_conditions text,
+  -- Which Mobile.bg account this firm publishes through. Today the publisher
+  -- reads one account from the VPS environment, which is enough for Royal Cars
+  -- BG and nothing else. Recording the intended account here now means a second
+  -- firm with API access is a row and a worker change, not a schema change — and
+  -- `secret_ref` is a *name*, never the credential itself, so a database dump
+  -- never carries a password. Royal Cars is left null: it keeps publishing
+  -- through the environment exactly as it does today.
+  mobile_bg_account_ref text,
+  mobile_bg_secret_ref text,
   is_active boolean not null default true,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -101,18 +110,22 @@ on conflict (company_id) do nothing;
 -- This is the join the owner asked to keep: which firms a car went out to, with
 -- what price and what text, and how each one ended.
 --
---   * `master_draft_id` is what was copied from.
+--   * `master_draft_id` is what was copied from, and the anchor the monitoring
+--     agent reads a car through: one master, its publications in every firm.
 --   * `draft_id` is the firm's own draft, filled in when the clone is made.
 --     Nullable until then, and it is the row the publisher actually reads.
 --   * The outcome lives here and nowhere shared: `status`, `error_message` and
 --     the prices are this firm's alone.
 --
--- `on delete cascade` on the master is deliberate: deleting the source draft
--- takes its intended publications with it, once the clone step is written. Until
--- then a row here refers to a source that may not exist yet.
+-- `on delete restrict` on the master is deliberate and is the opposite of the
+-- obvious choice. Cascading would let deleting one draft silently erase the
+-- record of listings that are live on Mobile.bg right now, and the monitoring
+-- agent would then have nothing to stop them with. A master cannot be discarded
+-- until its publications are resolved, which is the order the owner has to work
+-- in anyway: take the listings down, then delete the car.
 create table if not exists public.company_publications (
   id uuid primary key default gen_random_uuid(),
-  master_draft_id uuid not null references public.mobile_bg_drafts(id) on delete cascade,
+  master_draft_id uuid not null references public.mobile_bg_drafts(id) on delete restrict,
   company_id uuid not null references public.companies(id) on delete restrict,
   draft_id uuid unique references public.mobile_bg_drafts(id) on delete set null,
   status text not null default 'PENDING',
@@ -127,6 +140,17 @@ create table if not exists public.company_publications (
   description_used text,
   mobile_bg_listing_id bigint,
   mobile_bg_url text,
+  -- What each firm actually receives for the car. The commission and the prices
+  -- above are what was calculated; this is the figure that went out, which is not
+  -- always the one that was intended once a firm adjusts it by hand.
+  listed_price_eur numeric,
+  -- The car's life within this firm, kept apart from the publishing pipeline
+  -- exactly as it is on the draft: a listing that is live is not the same
+  -- question as a car that has been sold, and the monitoring agent has to answer
+  -- both.
+  listing_state text not null default 'AVAILABLE',
+  sold_at timestamptz,
+  sold_price_eur numeric,
   attempts integer not null default 0,
   created_by uuid,
   created_at timestamptz not null default now(),
@@ -136,6 +160,12 @@ create table if not exists public.company_publications (
   -- checkbox twice publishes the same car twice.
   unique (master_draft_id, company_id)
 );
+
+alter table public.company_publications
+  drop constraint if exists company_publications_listing_state_check;
+alter table public.company_publications
+  add constraint company_publications_listing_state_check
+  check (listing_state in ('AVAILABLE', 'SOLD', 'INACTIVE'));
 
 alter table public.company_publications
   drop constraint if exists company_publications_status_check;
@@ -331,12 +361,25 @@ select
   p.contact_email,
   p.seller_name,
   p.is_active as profile_active,
+  p.mobile_bg_account_ref,
+  -- The firm's own advertising phone, else the number on the company itself.
+  -- Royal Cars BG already carries its number on `companies` and has no row here
+  -- yet, so the fallback is what keeps the first firm selectable.
+  coalesce(p.contact_phone, c.phone) as effective_phone,
   r.commission_type,
   r.commission_value,
   r.commission_currency,
   r.min_price_eur,
   r.max_price_eur,
-  (p.contact_phone is not null) as has_phone
+  (coalesce(p.contact_phone, c.phone) is not null) as has_phone,
+  -- Whether the firm can actually be ticked for Mobile.bg. The publisher still
+  -- takes its account from the VPS environment, so `mobile_bg_account_ref` being
+  -- null is not a failure today — but the flag is what a second firm's row will
+  -- turn on, and it keeps the reason visible in one place instead of in the
+  -- worker.
+  (c.status = 'ACTIVE'
+   and coalesce(p.is_active, true)
+   and coalesce(p.contact_phone, c.phone) is not null) as ready_to_publish
 from public.companies c
 left join public.company_publication_profiles p on p.company_id = c.id
 left join public.company_commission_rules r on r.company_id = c.id;

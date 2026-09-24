@@ -295,6 +295,16 @@ create unique index if not exists uq_source_listing_jobs_active_identity
 -- The company comes from the acting user, passed in as `p_requested_by`, and not
 -- from the row being inserted. The function is SECURITY DEFINER, so an insert
 -- that named the company directly could be pointed at another firm.
+--
+-- `p_company_id` is the one addition, and it exists to stop the owner being
+-- permanently read as Royal Cars BG. It is honoured *only* for a system
+-- administrator and refused for everyone else, so a broker stays pinned to their
+-- own firm. It has to be added now rather than later: this migration itself
+-- explains that a second signature with the same leading arguments makes
+-- `queue_source_intake(...)` ambiguous and stops the Edge Function working, so a
+-- later addition would mean changing the signature anyway — and doing it while
+-- the default is null keeps every existing call, including the Edge Function's,
+-- byte-for-byte valid.
 create or replace function public.queue_source_intake(
   p_source_url text,
   p_source_type text,
@@ -303,7 +313,8 @@ create or replace function public.queue_source_intake(
   p_intake_origin text default 'LINK_FIELD',
   p_catalog_permanent_id integer default null,
   p_title text default null,
-  p_requested_by uuid default null
+  p_requested_by uuid default null,
+  p_company_id uuid default null
 )
 returns table(draft_id uuid, was_created boolean, job_status text)
 language plpgsql
@@ -335,12 +346,31 @@ begin
   select p.company_id, p.role into v_company_id, v_role
   from public.profiles p where p.user_id = p_requested_by;
 
+  -- An explicitly chosen company is taken at face value only from a system
+  -- administrator. Anyone else naming a firm is refused rather than quietly
+  -- given their own, because silently ignoring the request would hide a real
+  -- mistake.
+  if p_company_id is not null then
+    if v_role <> 'SYSTEM_ADMIN' then
+      raise exception 'Само системен администратор може да избере друга фирма.'
+        using errcode = '42501';
+    end if;
+    if not exists (select 1 from public.companies c where c.id = p_company_id) then
+      raise exception 'Избраната фирма не съществува.' using errcode = '23503';
+    end if;
+    v_company_id := p_company_id;
+  end if;
+
   -- A system administrator holds no company on purpose, and needs one to import
   -- a link: the owner works in Royal Cars BG through the same workflow as a
   -- company user. The single active company answers for them, exactly as the
   -- insert trigger does. A broker who has not been placed is still refused —
   -- filing them into whichever company happens to exist would be the silent
   -- misplacement this migration is about.
+  --
+  -- This fallback is deliberately short-lived. It works while one firm exists and
+  -- stops working the moment there are two, which is the point: from then on the
+  -- owner names the company, and nothing quietly assumes Royal Cars.
   if v_company_id is null and v_role = 'SYSTEM_ADMIN' then
     select count(*), min(c.id) into v_active_count, v_active_company
     from public.companies c
@@ -351,6 +381,9 @@ begin
   end if;
 
   if v_company_id is null then
+    if v_role = 'SYSTEM_ADMIN' then
+      raise exception 'Изберете фирма, за която да импортирате линка.' using errcode = '42501';
+    end if;
     raise exception 'Профилът няма фирма.' using errcode = '42501';
   end if;
 
@@ -421,10 +454,19 @@ $$;
 
 -- Still server-only: the Edge Function reaches it with the service role, as
 -- before. Nothing here widens that.
-revoke all on function public.queue_source_intake(text, text, text, text, text, integer, text, uuid) from public;
-revoke all on function public.queue_source_intake(text, text, text, text, text, integer, text, uuid) from anon;
-revoke all on function public.queue_source_intake(text, text, text, text, text, integer, text, uuid) from authenticated;
-grant execute on function public.queue_source_intake(text, text, text, text, text, integer, text, uuid) to service_role;
+--
+-- The eight-argument version is dropped explicitly. `create or replace` matches
+-- on the argument list, so adding a defaulted ninth argument creates a *second*
+-- function rather than replacing the first — and the old one would stay behind,
+-- still granted to the service role, still inserting without a company. That is
+-- the ambiguity this migration's own note warns about, arriving from the other
+-- direction.
+drop function if exists public.queue_source_intake(text, text, text, text, text, integer, text, uuid);
+
+revoke all on function public.queue_source_intake(text, text, text, text, text, integer, text, uuid, uuid) from public;
+revoke all on function public.queue_source_intake(text, text, text, text, text, integer, text, uuid, uuid) from anon;
+revoke all on function public.queue_source_intake(text, text, text, text, text, integer, text, uuid, uuid) from authenticated;
+grant execute on function public.queue_source_intake(text, text, text, text, text, integer, text, uuid, uuid) to service_role;
 
 -- ============================================================
 -- 6. Companies and profiles

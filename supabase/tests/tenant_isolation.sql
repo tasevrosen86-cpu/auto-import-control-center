@@ -424,15 +424,43 @@ begin
     when insufficient_privilege then null;
   end;
 
+  -- A broker cannot aim an import at another firm by naming it. Multi-company is
+  -- the owner's alone; a broker is pinned to their own company.
+  begin
+    perform public.queue_source_intake(
+      'https://fem.encar.com/cars/detail/777888999', 'encar', 'fem.encar.com', '777888999',
+      'LINK_FIELD', null, null, v_other_broker, v_royal
+    );
+    raise exception 'a broker was allowed to import into another company';
+  exception
+    when insufficient_privilege then null;
+  end;
+
+  -- The owner may name a firm, which is what stops the current single-company
+  -- fallback from becoming the permanent meaning of a system administrator.
+  select * into v_result from public.queue_source_intake(
+    'https://fem.encar.com/cars/detail/121212121', 'encar', 'fem.encar.com', '121212121',
+    'LINK_FIELD', null, null, current_setting('test.admin')::uuid, v_other
+  );
+  if not v_result.was_created then
+    raise exception 'the owner could not choose the company to import into';
+  end if;
+  if not exists (
+    select 1 from public.mobile_bg_drafts
+    where source_listing_id = '121212121' and company_id = v_other
+  ) then
+    raise exception 'the owner''s chosen company was ignored';
+  end if;
+
   -- The whole function is server-only; a browser client must not reach it.
   if has_function_privilege('authenticated',
-      'public.queue_source_intake(text, text, text, text, text, integer, text, uuid)', 'EXECUTE')
+      'public.queue_source_intake(text, text, text, text, text, integer, text, uuid, uuid)', 'EXECUTE')
      or has_function_privilege('anon',
-      'public.queue_source_intake(text, text, text, text, text, integer, text, uuid)', 'EXECUTE') then
+      'public.queue_source_intake(text, text, text, text, text, integer, text, uuid, uuid)', 'EXECUTE') then
     raise exception 'the intake function is reachable by a client role';
   end if;
   if not has_function_privilege('service_role',
-      'public.queue_source_intake(text, text, text, text, text, integer, text, uuid)', 'EXECUTE') then
+      'public.queue_source_intake(text, text, text, text, text, integer, text, uuid, uuid)', 'EXECUTE') then
     raise exception 'the intake function is not reachable by the service role';
   end if;
 end $$;
@@ -467,11 +495,12 @@ begin
     raise exception 'permissive authenticated policies remain: %', v_bad;
   end if;
 
-  -- Two drafts exist for the other company now (the fixture and the intake one),
-  -- so the count is checked to be exact rather than merely non-zero.
+  -- Three drafts exist for the other company now — the fixture, the intake one,
+  -- and the one the owner aimed at it — so the count is checked to be exact
+  -- rather than merely non-zero.
   select count(*) into v_total from public.mobile_bg_drafts;
-  if v_total <> 2 then
-    raise exception 'the intake test left % drafts visible to the other company, expected 2', v_total;
+  if v_total <> 3 then
+    raise exception 'the other company sees % drafts, expected 3', v_total;
   end if;
 end $$;
 
