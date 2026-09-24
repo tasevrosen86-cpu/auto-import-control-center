@@ -140,8 +140,10 @@ jobs:
           tar -C services/mobile-publisher -czf mobile-publisher.tar.gz src package.json package-lock.json
           tar -C services/mobile-bg-api-publisher -czf mobile-bg-api-publisher.tar.gz src package.json package-lock.json
           tar -C services/publications-publisher -czf publications-publisher.tar.gz src package.json package-lock.json
+          tar -C services/mobile-bg-cleanup -czf mobile-bg-cleanup.tar.gz src package.json package-lock.json
           scp -P "$VPS_PORT" dist.tar.gz worker.tar.gz mobile-publisher.tar.gz mobile-publisher.env \
             mobile-bg-api-publisher.tar.gz mobile-bg-api.env \
+            mobile-bg-cleanup.tar.gz \
             publications-publisher.tar.gz publications.env "$VPS_USER@$VPS_HOST:/tmp/"
 
           ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" 'bash -s' <<'REMOTE_SCRIPT'
@@ -228,6 +230,20 @@ jobs:
           # A deploy copies the built site over /var/www/html. `cp -a` merges
           # rather than replaces, so the picture directory survives it.
           echo "API publisher installed; picture directory is writable by the worker."
+
+          # The file-cleanup worker for deleted «Обяви» drafts. It removes the
+          # picture directory the API publisher wrote and the browser publisher's
+          # leftover screenshots, working from the `mobile_bg_purge_jobs` queue.
+          # It shares the API publisher's environment file, because it needs the
+          # same Supabase credentials and the same picture root, and overrides
+          # only its worker name in the unit. It never reads the publish queue.
+          CLEANUP_DIR="$APP_DIR/services/mobile-bg-cleanup"
+          mkdir -p "$CLEANUP_DIR"
+          tar -xzf /tmp/mobile-bg-cleanup.tar.gz -C "$CLEANUP_DIR"
+          cd "$CLEANUP_DIR"
+          npm ci
+          rm -f /tmp/mobile-bg-cleanup.tar.gz
+          echo "Cleanup worker installed."
 
           # The Publications publisher is a second, separate worker. It gets its
           # own directory, its own environment file and its own timer, so a
@@ -326,6 +342,48 @@ jobs:
           if ! sudo systemctl start aicc-mobile-bg-api-publisher.service; then
             echo "::warning::API publisher did not start; see journal below."
             sudo journalctl -u aicc-mobile-bg-api-publisher.service -n 80 --no-pager || true
+          fi
+
+          # Cleanup of deleted drafts' files. Its own unit and timer, and it
+          # reuses the API publisher's environment file for the Supabase
+          # credentials while naming itself differently. A failure is a warning:
+          # a queued cleanup that fails leaves its row FAILED and is visible,
+          # and the draft itself is already gone from the database.
+          sudo tee /etc/systemd/system/aicc-mobile-bg-cleanup.service >/dev/null <<UNIT
+          [Unit]
+          Description=Auto Import Control Center Mobile.bg deleted-draft file cleanup
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=oneshot
+          User=ubuntu
+          WorkingDirectory=$CLEANUP_DIR
+          $SOURCE_ENV_LINE
+          EnvironmentFile=/etc/aicc-mobile-bg-api.env
+          Environment=WORKER_NAME=aicc-mobile-bg-cleanup
+          ExecStart=$NPM_BIN run run-once
+          UNIT
+
+          sudo tee /etc/systemd/system/aicc-mobile-bg-cleanup.timer >/dev/null <<UNIT
+          [Unit]
+          Description=Run the Mobile.bg deleted-draft file cleanup
+
+          [Timer]
+          OnBootSec=90s
+          OnUnitActiveSec=60s
+          Persistent=true
+          Unit=aicc-mobile-bg-cleanup.service
+
+          [Install]
+          WantedBy=timers.target
+          UNIT
+
+          sudo systemctl daemon-reload
+          sudo systemctl enable --now aicc-mobile-bg-cleanup.timer
+          if ! sudo systemctl start aicc-mobile-bg-cleanup.service; then
+            echo "::warning::Cleanup worker did not start; see journal below."
+            sudo journalctl -u aicc-mobile-bg-cleanup.service -n 80 --no-pager || true
           fi
 
           # Publications: its own unit and timer, same shape as the one above but

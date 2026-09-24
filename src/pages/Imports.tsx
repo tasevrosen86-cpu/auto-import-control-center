@@ -2,9 +2,11 @@ import { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   Download, CheckCircle, AlertTriangle, Plus, Image as ImageIcon,
   Shield, Save, Send, ChevronDown, ChevronRight,
-  Lock, Eye, Edit3, History, AlertOctagon,
+  Lock, Eye, Edit3, History, AlertOctagon, Trash2,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import { PurgeDraftDialog } from '@/components/PurgeDraftDialog';
+import { purgeDraft, purgeErrorMessage } from '@/lib/draft_purge';
 import { createDraftFromSourceUrl } from '@/lib/draft_create';
 import { composeRoyalCarsDescription, ROYAL_CARS_PUBLISH_DEFAULTS } from '@/lib/company_profile';
 import { Badge } from '@/components/Badge';
@@ -61,6 +63,26 @@ export function Imports({ openDraftId = null, onDraftOpened }: ImportsProps) {
   const [sourceUrl, setSourceUrl] = useState('');
   const [intakeError, setIntakeError] = useState<string | null>(null);
   const [creatingFromUrl, setCreatingFromUrl] = useState(false);
+  // The draft waiting in the confirmation dialog, and the reason a deletion
+  // failed if one did. Nothing is deleted without the dialog passing first.
+  const [purgeTarget, setPurgeTarget] = useState<{ id: string; title: string | null } | null>(null);
+  const [purgeNotice, setPurgeNotice] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
+
+  async function handlePurgeDraft(draftId: string) {
+    const { data: session } = await supabase.auth.getSession();
+    const actor = session?.session?.user?.email || 'admin';
+    try {
+      const result = await purgeDraft(draftId, actor);
+      setPurgeTarget(null);
+      setPurgeNotice({
+        kind: 'ok',
+        text: `Черновата${result.title ? ` „${result.title}“` : ''} е изтрита завинаги${result.dedup_links_cleared > 0 ? `, изчистени ${result.dedup_links_cleared} връзки от други чернови` : ''}. Файловете на сървъра се изчистват до минута.`,
+      });
+      await load();
+    } catch (cause) {
+      throw new Error(purgeErrorMessage(cause));
+    }
+  }
   useEffect(() => {
     if (!openDraftId) return;
     setSelectedDraftId(openDraftId);
@@ -172,6 +194,12 @@ export function Imports({ openDraftId = null, onDraftOpened }: ImportsProps) {
         </div>
       </div>
       {intakeError && <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">{intakeError}</div>}
+      {purgeNotice && (
+        <div className={`flex items-start justify-between gap-2 rounded-md border px-3 py-2 text-xs ${purgeNotice.kind === 'ok' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-rose-200 bg-rose-50 text-rose-700'}`}>
+          <span>{purgeNotice.text}</span>
+          <button onClick={() => setPurgeNotice(null)} className="font-bold opacity-60 hover:opacity-100" aria-label="Затвори">×</button>
+        </div>
+      )}
 
       {/* KPI cards */}
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
@@ -228,9 +256,18 @@ export function Imports({ openDraftId = null, onDraftOpened }: ImportsProps) {
                       : <span className="text-slate-300">—</span>}
                   </td>
                   <td className="px-2 py-1 text-center">
-                    <button onClick={e => { e.stopPropagation(); handleSelectDraft(d.id); }} className="rounded border border-blue-200 bg-blue-50 px-2 py-1 font-bold text-blue-600 hover:bg-blue-100">
-                      <Eye className="inline h-3 w-3" /> Отвори
-                    </button>
+                    <div className="flex items-center justify-center gap-1">
+                      <button onClick={e => { e.stopPropagation(); handleSelectDraft(d.id); }} className="rounded border border-blue-200 bg-blue-50 px-2 py-1 font-bold text-blue-600 hover:bg-blue-100">
+                        <Eye className="inline h-3 w-3" /> Отвори
+                      </button>
+                      <button
+                        onClick={e => { e.stopPropagation(); setPurgeTarget({ id: d.id, title: d.title }); }}
+                        title="Изтрий черновата завинаги"
+                        className="rounded border border-rose-200 bg-rose-50 px-2 py-1 font-bold text-rose-600 hover:bg-rose-100"
+                      >
+                        <Trash2 className="inline h-3 w-3" /> Изтрий
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -369,6 +406,15 @@ export function Imports({ openDraftId = null, onDraftOpened }: ImportsProps) {
           </div>
         )}
       </div>
+
+      {purgeTarget && (
+        <PurgeDraftDialog
+          draftId={purgeTarget.id}
+          draftTitle={purgeTarget.title}
+          onCancel={() => setPurgeTarget(null)}
+          onConfirm={() => handlePurgeDraft(purgeTarget.id)}
+        />
+      )}
     </div>
   );
 }
@@ -1032,6 +1078,7 @@ function isFieldLocked(draft: MobileBgDraft, fields: MobileBgDraftField[], field
 
 function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void }) {
   const [draft, setDraft] = useState<MobileBgDraft | null>(null);
+  const [purgeError, setPurgeError] = useState<string | null>(null);
   const [fields, setFields] = useState<MobileBgDraftField[]>([]);
   const [extras, setExtras] = useState<MobileBgDraftExtra[]>([]);
   const [images, setImages] = useState<MobileBgDraftImage[]>([]);
@@ -1051,6 +1098,20 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
   const [showApiView, setShowApiView] = useState(false);
   const [apiPublishJob, setApiPublishJob] = useState<MobileBgPublishJob | null>(null);
   const [queuingApiPublish, setQueuingApiPublish] = useState(false);
+  const [showPurgeDialog, setShowPurgeDialog] = useState(false);
+
+  async function handlePurgeHere() {
+    const { data: session } = await supabase.auth.getSession();
+    const actor = session?.session?.user?.email || 'admin';
+    try {
+      await purgeDraft(draftId, actor);
+      // The draft is gone, so the detail screen has nothing left to show.
+      onBack();
+    } catch (cause) {
+      setPurgeError(purgeErrorMessage(cause));
+      throw new Error(purgeErrorMessage(cause));
+    }
+  }
 
   const loadDraft = useCallback(async () => {
     const [dRes, fRes, eRes, iRes, lRes, ddRes, pRes] = await Promise.all([
@@ -1325,8 +1386,13 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
               Диагностика
             </button>
           )}
+          <button onClick={() => { setPurgeError(null); setShowPurgeDialog(true); }} className="flex items-center gap-1.5 rounded-md border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 shadow-sm hover:bg-rose-100">
+            <Trash2 className="h-3.5 w-3.5" /> Изтрий
+          </button>
         </div>
       </div>
+
+      {purgeError && <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">{purgeError}</div>}
 
       <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -1477,6 +1543,15 @@ function DraftDetail({ draftId, onBack }: { draftId: string; onBack: () => void 
             ))}
           </div>
         </div>
+      )}
+
+      {showPurgeDialog && (
+        <PurgeDraftDialog
+          draftId={draftId}
+          draftTitle={draft.title}
+          onCancel={() => setShowPurgeDialog(false)}
+          onConfirm={handlePurgeHere}
+        />
       )}
     </div>
   );
