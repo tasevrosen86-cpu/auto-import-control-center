@@ -1,0 +1,383 @@
+-- Royal Cars BG — tenant separation for the «Обяви» (publishing) data.
+--
+-- Before this migration every Mobile.bg policy read `using (true)` for both
+-- `anon` and `authenticated`, so any signed-in broker could read every other
+-- firm's drafts by calling the REST API directly, whatever the menu showed.
+-- This migration replaces those policies for `authenticated` with ones that
+-- compare the row's company against the caller's own.
+--
+-- `anon` is deliberately left as it was. The Mobile.bg workers run with the
+-- public key on the VPS (see `deploy-vps.yml`), so tightening `anon` here would
+-- stop publishing the moment it was applied. The follow-up migration
+-- `20260925140000_royal_cars_close_anon.sql` closes that gap and is switched on
+-- once the workers carry the service-role key.
+
+-- ============================================================
+-- 1. Royal Cars BG as the first real tenant
+-- ============================================================
+insert into public.companies (slug, name, status, legal_name, phone)
+values ('royal-cars-bg', 'Royal Cars BG', 'ACTIVE', 'Royal Cars BG', '0887353653')
+on conflict (slug) do nothing;
+
+-- Everything created until now belongs to Royal Cars BG, which is the company
+-- the owner actually operates. The placeholder UUID was never a tenant.
+update public.mobile_bg_drafts
+   set company_id = (select id from public.companies where slug = 'royal-cars-bg')
+ where company_id = '00000000-0000-0000-0000-000000000000';
+
+-- A draft without a company can no longer be read by anyone, so a forgotten
+-- insert must fail at the database rather than disappear from every screen.
+--
+-- The default reads the company from the session instead of dropping to null:
+-- an insert that omits `company_id` then lands in the caller's own firm, which
+-- is what the UI relies on, and one that names another firm is refused by the
+-- policy. A worker running as the service role has no session, so it must pass
+-- the company explicitly and gets a clear failure if it forgets.
+alter table public.mobile_bg_drafts
+  alter column company_id set default public.current_company_id();
+
+-- ============================================================
+-- 2. company_id on the publishing queue
+-- ============================================================
+-- The queue is reached from the draft, but a job also has to be listed per
+-- company without a join, and a job for a deleted draft must not become
+-- readable to another firm.
+alter table public.mobile_bg_publish_jobs
+  add column if not exists company_id uuid references public.companies(id) on delete restrict;
+
+update public.mobile_bg_publish_jobs job
+   set company_id = draft.company_id
+  from public.mobile_bg_drafts draft
+ where draft.id = job.draft_id
+   and job.company_id is null;
+
+create index if not exists idx_publish_jobs_company on public.mobile_bg_publish_jobs(company_id);
+
+-- source_listing_jobs is reached through its draft as well, and the intake
+-- function sets the same company on both.
+alter table public.source_listing_jobs
+  add column if not exists company_id uuid references public.companies(id) on delete restrict;
+
+update public.source_listing_jobs job
+   set company_id = draft.company_id
+  from public.mobile_bg_drafts draft
+ where draft.id = job.draft_id
+   and job.company_id is null;
+
+create index if not exists idx_source_jobs_company on public.source_listing_jobs(company_id);
+
+-- ============================================================
+-- 3. Tenant policies for authenticated users
+-- ============================================================
+-- Every policy that named `anon` or `authenticated` on these tables is removed
+-- and replaced by a pair per table: one for `anon`, unchanged in effect, and one
+-- for `authenticated`, scoped to the caller's company.
+--
+-- The sweep is by role rather than by name because the permissive policies were
+-- created over several migrations under inconsistent names — `anon_select_draft_fields`,
+-- `app_SELECT_mobile_bg_drafts`, `anon_update_source_listing_jobs` — and each of
+-- them named both roles. Dropping only the names this migration knew about left
+-- `anon_select_draft_fields` in place, and because it also listed
+-- `authenticated`, it went on granting every broker every firm's rows.
+do $$
+declare
+  pol record;
+begin
+  for pol in
+    select tablename, policyname
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = any (array[
+        'mobile_bg_drafts', 'mobile_bg_draft_fields', 'mobile_bg_draft_extras',
+        'mobile_bg_draft_images', 'mobile_bg_draft_action_log', 'mobile_bg_dedup_checks',
+        'mobile_bg_publish_jobs', 'source_listing_jobs'
+      ])
+      and roles && array['anon', 'authenticated']::name[]
+  loop
+    execute format('drop policy %I on public.%I', pol.policyname, pol.tablename);
+  end loop;
+end $$;
+
+-- The predicate differs by table: the drafts table carries company_id itself,
+-- the others reach it through the parent draft.
+create or replace function public.can_access_draft(target_draft uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  select exists (
+    select 1 from public.mobile_bg_drafts d
+    where d.id = target_draft and public.can_access_company(d.company_id)
+  );
+$$;
+
+revoke all on function public.can_access_draft(uuid) from public;
+grant execute on function public.can_access_draft(uuid) to anon, authenticated, service_role;
+
+-- Tables that carry company_id directly.
+do $$
+declare
+  t text;
+  cmd text;
+  anon_name text;
+  auth_name text;
+begin
+  foreach t in array array['mobile_bg_drafts', 'mobile_bg_publish_jobs', 'source_listing_jobs'] loop
+    foreach cmd in array array['SELECT', 'INSERT', 'UPDATE', 'DELETE'] loop
+      anon_name := format('tenant_anon_%s_%s', lower(cmd), t);
+      auth_name := format('tenant_auth_%s_%s', lower(cmd), t);
+
+      execute format(
+        'create policy %I on public.%I for %s to anon %s',
+        anon_name, t, cmd,
+        case when cmd = 'INSERT' then 'with check (true)' else 'using (true)' end
+      );
+
+      -- A SELECT or UPDATE sees the row through USING; an INSERT has no existing
+      -- row, so it checks the company being written instead — otherwise a broker
+      -- could file a draft into another firm.
+      execute format(
+        'create policy %I on public.%I for %s to authenticated %s',
+        auth_name, t, cmd,
+        case cmd
+          when 'INSERT' then 'with check (public.can_access_company(company_id))'
+          when 'UPDATE' then 'using (public.can_access_company(company_id)) with check (public.can_access_company(company_id))'
+          else 'using (public.can_access_company(company_id))'
+        end
+      );
+    end loop;
+  end loop;
+end $$;
+
+-- Tables reached through the parent draft.
+do $$
+declare
+  t text;
+  cmd text;
+  anon_name text;
+  auth_name text;
+begin
+  foreach t in array array[
+    'mobile_bg_draft_fields', 'mobile_bg_draft_extras', 'mobile_bg_draft_images',
+    'mobile_bg_draft_action_log', 'mobile_bg_dedup_checks'
+  ] loop
+    foreach cmd in array array['SELECT', 'INSERT', 'UPDATE', 'DELETE'] loop
+      anon_name := format('tenant_anon_%s_%s', lower(cmd), t);
+      auth_name := format('tenant_auth_%s_%s', lower(cmd), t);
+
+      execute format(
+        'create policy %I on public.%I for %s to anon %s',
+        anon_name, t, cmd,
+        case when cmd = 'INSERT' then 'with check (true)' else 'using (true)' end
+      );
+
+      execute format(
+        'create policy %I on public.%I for %s to authenticated %s',
+        auth_name, t, cmd,
+        case cmd
+          when 'INSERT' then 'with check (public.can_access_draft(draft_id))'
+          when 'UPDATE' then 'using (public.can_access_draft(draft_id)) with check (public.can_access_draft(draft_id))'
+          else 'using (public.can_access_draft(draft_id))'
+        end
+      );
+    end loop;
+  end loop;
+end $$;
+
+-- ============================================================
+-- 4. One draft per company, not per system
+-- ============================================================
+-- The queue deduplicates a source link globally. Two firms importing the same
+-- car are doing different deals, so the identity has to carry the company or the
+-- second firm would silently receive the first firm's draft.
+drop index if exists public.uq_source_listing_jobs_active_identity;
+create unique index if not exists uq_source_listing_jobs_active_identity
+  on public.source_listing_jobs(company_id, source_identity)
+  where status in ('QUEUED', 'RUNNING', 'COMPLETED');
+
+-- ============================================================
+-- 5. The intake function files a draft under the caller's company
+-- ============================================================
+-- This replaces the existing eight-argument function rather than adding an
+-- overload: a second signature with the same first arguments makes
+-- `queue_source_intake(...)` ambiguous, and Postgres resolves the call by
+-- argument count, so the Edge Function would stop working the moment both
+-- existed.
+--
+-- The company comes from the acting user, passed in as `p_requested_by`, and not
+-- from the row being inserted. The function is SECURITY DEFINER, so an insert
+-- that named the company directly could be pointed at another firm.
+create or replace function public.queue_source_intake(
+  p_source_url text,
+  p_source_type text,
+  p_source_domain text,
+  p_source_listing_id text,
+  p_intake_origin text default 'LINK_FIELD',
+  p_catalog_permanent_id integer default null,
+  p_title text default null,
+  p_requested_by uuid default null
+)
+returns table(draft_id uuid, was_created boolean, job_status text)
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_source_url text := trim(coalesce(p_source_url, ''));
+  v_source_domain text := lower(trim(coalesce(p_source_domain, '')));
+  v_source_listing_id text := nullif(trim(coalesce(p_source_listing_id, '')), '');
+  v_company_id uuid;
+  v_identity text;
+  v_existing_draft_id uuid;
+  v_new_draft_id uuid;
+  v_title text;
+begin
+  if p_requested_by is null then
+    raise exception 'Липсва идентифициран потребител.' using errcode = '42501';
+  end if;
+
+  select p.company_id into v_company_id from public.profiles p where p.user_id = p_requested_by;
+  if v_company_id is null then
+    raise exception 'Профилът няма фирма.' using errcode = '42501';
+  end if;
+
+  if v_source_url = '' or v_source_domain = '' then
+    raise exception 'Липсва валиден линк към източниковата обява.' using errcode = '22023';
+  end if;
+
+  v_identity := v_source_domain || '|' || coalesce(
+    v_source_listing_id,
+    lower(regexp_replace(v_source_url, '[?#].*$', ''))
+  );
+
+  -- Locked per company: two brokers in the same firm clicking the same link get
+  -- one draft between them, while two different firms never wait on each other.
+  perform pg_advisory_xact_lock(hashtext(v_company_id::text || '|' || v_identity));
+
+  select job.draft_id into v_existing_draft_id
+  from public.source_listing_jobs as job
+  where job.source_identity = v_identity
+    and job.company_id = v_company_id
+    and job.status in ('QUEUED', 'RUNNING', 'COMPLETED')
+  limit 1;
+
+  if v_existing_draft_id is not null then
+    return query select v_existing_draft_id, false, 'EXISTS';
+    return;
+  end if;
+
+  v_title := coalesce(
+    nullif(trim(p_title), ''),
+    'Изчаква извличане — ' || v_source_domain || coalesce(' #' || v_source_listing_id, '')
+  );
+
+  insert into public.mobile_bg_drafts (
+    catalog_permanent_id, title, status, source_type, source_url,
+    source_listing_id, intake_origin, extraction_status, source_domain, created_by,
+    company_id
+  ) values (
+    p_catalog_permanent_id, v_title, 'DRAFT', p_source_type, v_source_url,
+    v_source_listing_id, p_intake_origin, 'SOURCE_PENDING', v_source_domain, p_requested_by::text,
+    v_company_id
+  ) returning id into v_new_draft_id;
+
+  insert into public.source_listing_jobs (
+    draft_id, source_type, source_url, source_identity, status, company_id
+  ) values (
+    v_new_draft_id, p_source_type, v_source_url, v_identity, 'QUEUED', v_company_id
+  );
+
+  insert into public.mobile_bg_draft_action_log (draft_id, action, actor, details)
+  values (
+    v_new_draft_id,
+    'SOURCE_LINK_QUEUED',
+    p_requested_by::text,
+    jsonb_build_object(
+      'intake_origin', p_intake_origin,
+      'source_type', p_source_type,
+      'source_url', v_source_url,
+      'source_listing_id', v_source_listing_id,
+      'catalog_permanent_id', p_catalog_permanent_id,
+      'company_id', v_company_id
+    )
+  );
+
+  return query select v_new_draft_id, true, 'QUEUED';
+end;
+$$;
+
+-- Still server-only: the Edge Function reaches it with the service role, as
+-- before. Nothing here widens that.
+revoke all on function public.queue_source_intake(text, text, text, text, text, integer, text, uuid) from public;
+revoke all on function public.queue_source_intake(text, text, text, text, text, integer, text, uuid) from anon;
+revoke all on function public.queue_source_intake(text, text, text, text, text, integer, text, uuid) from authenticated;
+grant execute on function public.queue_source_intake(text, text, text, text, text, integer, text, uuid) to service_role;
+
+-- ============================================================
+-- 6. Companies and profiles
+-- ============================================================
+drop policy if exists companies_read_own on public.companies;
+create policy companies_read_own on public.companies for select to authenticated
+  using (public.is_system_admin() or id = public.current_company_id());
+
+drop policy if exists companies_system_admin_write on public.companies;
+create policy companies_system_admin_write on public.companies for all to authenticated
+  using (public.is_system_admin()) with check (public.is_system_admin());
+
+drop policy if exists profiles_read_own on public.profiles;
+create policy profiles_read_own on public.profiles for select to authenticated
+  using (
+    user_id = (select auth.uid())
+    or public.is_system_admin()
+    or (public.is_company_admin() and company_id = public.current_company_id())
+  );
+
+-- A user maintains their own name and phone, never their role or company; a
+-- system administrator maintains anyone. The trigger on the table is what makes
+-- the column list safe: it re-normalises the role when the row is a system
+-- administrator's, and a non-admin cannot reach this policy to change a role.
+drop policy if exists profiles_update_self on public.profiles;
+create policy profiles_update_self on public.profiles for update to authenticated
+  using (user_id = (select auth.uid()) or public.is_system_admin())
+  with check (user_id = (select auth.uid()) or public.is_system_admin());
+
+-- Company managers add and manage their own firm's users.
+drop policy if exists profiles_company_admin_insert on public.profiles;
+create policy profiles_company_admin_insert on public.profiles for insert to authenticated
+  with check (public.is_system_admin() or (public.is_company_admin() and company_id = public.current_company_id()));
+
+drop policy if exists profiles_company_admin_delete on public.profiles;
+create policy profiles_company_admin_delete on public.profiles for delete to authenticated
+  using (public.is_system_admin() or (public.is_company_admin() and company_id = public.current_company_id()));
+
+grant select, insert, update, delete on public.companies to authenticated;
+grant select, insert, update, delete on public.profiles to authenticated;
+grant all on public.companies to service_role;
+grant all on public.profiles to service_role;
+
+-- ============================================================
+-- 7. The caller must be a real, active profile to use publishing
+-- ============================================================
+-- `can_access_company` already refuses a user with no profile. This adds the
+-- disabled case, so suspending a broker in `profiles` takes their access away
+-- without touching their login.
+create or replace function public.can_access_company(target uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, private, pg_temp
+as $$
+  select
+    public.is_system_admin()
+    or exists (
+      select 1
+      from public.profiles p
+      where p.user_id = (select auth.uid())
+        and p.status = 'ACTIVE'
+        and target is not null
+        and p.company_id = target
+    );
+$$;

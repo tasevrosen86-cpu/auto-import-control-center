@@ -1,8 +1,8 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Search, ChevronLeft, ChevronRight, RotateCcw, Plus, Download, SlidersHorizontal, ExternalLink, Filter, Eye } from 'lucide-react';
 import { Badge } from '@/components/Badge';
 import { formatEUR, STATUS_COLORS, STATUS_LABELS_BG, getStatusLabel, getPriceColor, priceColorClass, calcDiff, diffColor } from '@/lib/format';
-import { catalogSorted, catalogStats, catalogFilterOptions, getCatalogModelsForMake, filterCatalog } from '@/lib/catalog';
+import { loadCatalog, getCatalogModelsForMake, filterCatalog, type CatalogDataset } from '@/lib/catalog';
 import type { VehicleWithMarketplace, VehicleMarketplace } from '@/types';
 import { createDraftSeed, type DraftSeed } from '@/lib/draft_seed';
 
@@ -19,26 +19,39 @@ export function VehicleList({ onSelectVehicle, onCreateDraft }: VehicleListProps
   const [yearTo, setYearTo] = useState('ALL');
   const [fuelFilter, setFuelFilter] = useState('ALL');
   const [page, setPage] = useState(1);
+  const [dataset, setDataset] = useState<CatalogDataset | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  const years = useMemo(
-    () => Array.from(new Set(catalogSorted.map((v) => v.model_year))).sort((a, b) => b - a),
-    [],
-  );
+  // The catalog is read from the database, and the database returns rows only to
+  // a system administrator. A broker or a company admin who reaches this page
+  // gets an empty result rather than a refusal, which is reported as such.
+  useEffect(() => {
+    let cancelled = false;
+    loadCatalog()
+      .then((loaded) => { if (!cancelled) setDataset(loaded); })
+      .catch((error) => {
+        if (!cancelled) setLoadError(error instanceof Error ? error.message : 'Каталогът не се зареди.');
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const years = dataset?.years ?? [];
 
   const modelsForMake = useMemo(() => {
-    if (makeFilter === 'ALL') return [];
-    return getCatalogModelsForMake(makeFilter);
-  }, [makeFilter]);
+    if (!dataset || makeFilter === 'ALL') return [];
+    return getCatalogModelsForMake(dataset, makeFilter);
+  }, [dataset, makeFilter]);
 
   const filtered = useMemo(() => {
-    return filterCatalog({
+    if (!dataset) return [];
+    return filterCatalog(dataset, {
       make: makeFilter,
       model: modelFilter,
       fuel: fuelFilter,
       yearFrom,
       yearTo,
     });
-  }, [makeFilter, modelFilter, fuelFilter, yearFrom, yearTo]);
+  }, [dataset, makeFilter, modelFilter, fuelFilter, yearFrom, yearTo]);
 
   const totalCount = filtered.length;
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
@@ -52,11 +65,23 @@ export function VehicleList({ onSelectVehicle, onCreateDraft }: VehicleListProps
     setYearFrom('ALL'); setYearTo('ALL'); setPage(1);
   }
 
+  if (loadError) {
+    return <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+      <p className="font-semibold">Каталогът не е достъпен.</p>
+      <p className="mt-1">{loadError}</p>
+      <p className="mt-1 text-amber-800">Този каталог е вътрешен и се вижда само от системния администратор.</p>
+    </div>;
+  }
+
+  if (!dataset) {
+    return <div className="flex h-64 items-center justify-center text-slate-400">Зареждане на каталога…</div>;
+  }
+
   return <div className="space-y-2.5">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <div className="flex items-baseline gap-3">
         <h2 className="text-[20px] font-extrabold tracking-tight text-[#172541]">Каталог автомобили</h2>
-        <span className="text-sm font-semibold text-slate-500">Общо: {catalogStats.total.toLocaleString('bg-BG')} позиции</span>
+        <span className="text-sm font-semibold text-slate-500">Общо: {dataset.stats.total.toLocaleString('bg-BG')} позиции</span>
       </div>
       <div className="flex gap-2">
         <button className="flex items-center gap-1.5 rounded bg-emerald-600 px-3 py-2 text-xs font-bold text-white shadow-sm hover:bg-emerald-700"><Plus className="h-3.5 w-3.5" /> Добави бележка</button>
@@ -67,11 +92,11 @@ export function VehicleList({ onSelectVehicle, onCreateDraft }: VehicleListProps
 
     <div className="rounded-md border border-slate-200 bg-white p-2 shadow-sm">
       <div className="grid grid-cols-2 gap-1.5 md:grid-cols-5">
-        <FilterSelect label="Марка" value={makeFilter} onChange={(v) => { setMakeFilter(v); setModelFilter('ALL'); setPage(1); }} options={['ALL', ...catalogFilterOptions.makes]} allLabel="Всички" />
+        <FilterSelect label="Марка" value={makeFilter} onChange={(v) => { setMakeFilter(v); setModelFilter('ALL'); setPage(1); }} options={['ALL', ...dataset.filterOptions.makes]} allLabel="Всички" />
         <FilterSelect label="Модел" value={modelFilter} onChange={(v) => { setModelFilter(v); setPage(1); }} options={['ALL', ...(makeFilter !== 'ALL' ? modelsForMake : [])]} allLabel="Всички" />
         <FilterSelect label="Година от" value={yearFrom} onChange={(v) => { setYearFrom(v); setPage(1); }} options={['ALL', ...years.map(String)]} allLabel="Всички" />
         <FilterSelect label="Година до" value={yearTo} onChange={(v) => { setYearTo(v); setPage(1); }} options={['ALL', ...years.map(String)]} allLabel="Всички" />
-        <FilterSelect label="Гориво" value={fuelFilter} onChange={(v) => { setFuelFilter(v); setPage(1); }} options={['ALL', ...FUEL_ORDER_LABEL.filter(f => catalogFilterOptions.fuels.includes(f))]} allLabel="Всички" />
+        <FilterSelect label="Гориво" value={fuelFilter} onChange={(v) => { setFuelFilter(v); setPage(1); }} options={['ALL', ...FUEL_ORDER_LABEL.filter(f => dataset.filterOptions.fuels.includes(f))]} allLabel="Всички" />
       </div>
       <div className="mt-2 flex gap-2">
         <button onClick={() => setPage(1)} className="flex h-8 items-center gap-1.5 rounded bg-blue-600 px-4 text-xs font-bold text-white hover:bg-blue-700"><Search className="h-3.5 w-3.5" /> Търси</button>
@@ -80,11 +105,11 @@ export function VehicleList({ onSelectVehicle, onCreateDraft }: VehicleListProps
     </div>
 
     <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-      <Kpi icon="🚙" value={catalogStats.total} label="Общо позиции" color="blue" />
-      <Kpi icon="✓" value={catalogStats.active} label="Активни" color="green" />
-      <Kpi icon="◷" value={catalogStats.review} label="За преглед" color="amber" />
-      <Kpi icon="×" value={catalogStats.noValid} label="Няма валидна обява" color="red" />
-      <Kpi icon="☁" value={catalogStats.publishedBg} label="Публикувани в Mobile.bg" color="purple" />
+      <Kpi icon="🚙" value={dataset.stats.total} label="Общо позиции" color="blue" />
+      <Kpi icon="✓" value={dataset.stats.active} label="Активни" color="green" />
+      <Kpi icon="◷" value={dataset.stats.review} label="За преглед" color="amber" />
+      <Kpi icon="×" value={dataset.stats.noValid} label="Няма валидна обява" color="red" />
+      <Kpi icon="☁" value={dataset.stats.publishedBg} label="Публикувани в Mobile.bg" color="purple" />
     </div>
 
     <div className="overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm">

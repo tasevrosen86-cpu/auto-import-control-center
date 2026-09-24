@@ -175,7 +175,7 @@ export function Publications(){
 function PublicationHeader({onRefresh,onOpenBrowser,busy}:{onRefresh:()=>void;onOpenBrowser:()=>void;busy:boolean}){
   return <header className="flex flex-wrap items-center justify-between gap-2">
     <div>
-      <h2 className="text-[20px] font-extrabold tracking-tight text-[#172541]">Публикации</h2>
+      <h2 className="text-[20px] font-extrabold tracking-tight text-[#172541]">Browser Use</h2>
       <p className="mt-0.5 text-sm text-slate-500">Чернови за Mobile.bg — AUTO IMPORT CONTROL CENTER</p>
     </div>
     <div className="flex items-center gap-2">

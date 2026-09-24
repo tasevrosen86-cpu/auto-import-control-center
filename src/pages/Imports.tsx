@@ -176,7 +176,7 @@ export function Imports({ openDraftId = null, onDraftOpened }: ImportsProps) {
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h2 className="text-[20px] font-extrabold tracking-tight text-[#172541]">Обяви</h2>
+          <h2 className="text-[20px] font-extrabold tracking-tight text-[#172541]">Публикуване</h2>
           <p className="text-sm text-slate-500 mt-0.5">Чернови за Mobile.bg — AUTO IMPORT CONTROL CENTER</p>
         </div>
         <div className="flex items-center gap-2">

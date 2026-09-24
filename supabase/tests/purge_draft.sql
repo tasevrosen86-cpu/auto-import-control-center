@@ -24,12 +24,12 @@ declare
   v_matched uuid;
 begin
   -- ---- Two drafts, one of them with data of every kind ----
-  insert into public.mobile_bg_drafts (title, status, source_type)
-  values ('TEST PURGE TARGET', 'ERROR', 'catalog')
+  insert into public.mobile_bg_drafts (title, status, source_type, company_id)
+  select 'TEST PURGE TARGET', 'ERROR', 'catalog', id from public.companies where slug = 'royal-cars-bg'
   returning id into v_draft;
 
-  insert into public.mobile_bg_drafts (title, status, source_type)
-  values ('TEST PURGE BYSTANDER', 'DRAFT', 'catalog')
+  insert into public.mobile_bg_drafts (title, status, source_type, company_id)
+  select 'TEST PURGE BYSTANDER', 'DRAFT', 'catalog', id from public.companies where slug = 'royal-cars-bg'
   returning id into v_other;
 
   insert into public.mobile_bg_draft_fields (draft_id, field_key, mobile_bg_label, our_db_key, value)
@@ -155,7 +155,8 @@ declare
   v_draft uuid;
   v_entry public.audit_log;
 begin
-  insert into public.mobile_bg_drafts (title, status) values ('TEST AUDIT', 'DRAFT')
+  insert into public.mobile_bg_drafts (title, status, company_id)
+  select 'TEST AUDIT', 'DRAFT', id from public.companies where slug = 'royal-cars-bg'
   returning id into v_draft;
 
   perform public.purge_mobile_bg_draft(v_draft, 'auditor@example.test');
@@ -206,7 +207,8 @@ declare
   v_error text;
   v_stopped boolean := false;
 begin
-  insert into public.mobile_bg_drafts (title, status) values ('TEST RUNNING', 'PUBLISHING')
+  insert into public.mobile_bg_drafts (title, status, company_id)
+  select 'TEST RUNNING', 'PUBLISHING', id from public.companies where slug = 'royal-cars-bg'
   returning id into v_draft;
   insert into public.mobile_bg_publish_jobs (draft_id, status, transport)
   values (v_draft, 'RUNNING', 'OFFICIAL_API');

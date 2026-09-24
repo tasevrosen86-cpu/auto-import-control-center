@@ -182,15 +182,16 @@ Deno.serve(async (request) => {
     if (error) return response({ error: error.message }, 500);
     if (!existing) return response({ error: 'Черновата не е намерена.' }, 404);
   } else {
-    const { data, error } = await db.from('mobile_bg_drafts').insert({
-      title, status: nextStatus, source_type: sourceType, source_url: sourceUrl,
-      source_listing_id: listingId, source_vin: sourceVin, source_price_eur: priceEur,
-      intake_origin: 'SCRIPT_JSON', extraction_status: 'PROCESSING',
-      source_domain: safeHostname(sourceUrl),
-      created_by: 'Source script',
-    }).select('id').single();
-    if (error || !data) return response({ error: error?.message || 'Черновата не беше създадена.' }, 500);
-    draftId = data.id;
+    // There used to be a fallback here that created a draft from the JSON alone.
+    // It cannot work any more, and should not: every draft now belongs to a
+    // company, and this function is told about the draft rather than about the
+    // firm, so a draft created here would have no owner and no firm could ever
+    // see it. Both callers already create their draft before queuing — the
+    // worker always sends `draft_id` — so this is a clear rejection instead of a
+    // row that silently belongs to nobody.
+    return response({
+      error: 'Липсва draft_id. Черновата се създава от опашката (queue-source-intake), преди извличането.',
+    }, 400);
   }
 
   const normalisedPayload = { source: { type: sourceType, url: sourceUrl, listing_id: listingId }, field_count: fields.length, missing_required_fields: missing };

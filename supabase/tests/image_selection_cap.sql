@@ -27,10 +27,14 @@ declare
   v_flag boolean;
   v_total integer;
 begin
-  insert into public.mobile_bg_drafts (title, status, source_type)
-  values ('TEST CAP ASC', 'DRAFT', 'catalog'), ('TEST CAP DESC', 'DRAFT', 'catalog'),
-         ('TEST CAP OTHER', 'DRAFT', 'catalog'), ('TEST CAP FREED', 'DRAFT', 'catalog'),
-         ('TEST CAP SOLO', 'DRAFT', 'catalog');
+  -- The fixtures run as the table owner, which has no session, so the company
+  -- has to be named. This is the same value the default fills in for a signed-in
+  -- user.
+  insert into public.mobile_bg_drafts (title, status, source_type, company_id)
+  select t.title, 'DRAFT', 'catalog', c.id
+  from (values ('TEST CAP ASC'), ('TEST CAP DESC'), ('TEST CAP OTHER'),
+               ('TEST CAP FREED'), ('TEST CAP SOLO')) as t(title)
+  cross join public.companies c where c.slug = 'royal-cars-bg';
   select id into v_asc from public.mobile_bg_drafts where title = 'TEST CAP ASC';
   select id into v_desc from public.mobile_bg_drafts where title = 'TEST CAP DESC';
   select id into v_other from public.mobile_bg_drafts where title = 'TEST CAP OTHER';
