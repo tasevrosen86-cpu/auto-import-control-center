@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "run-once": "tsx src/index.ts",
-    "test": "tsx test/mapping.test.ts"
+    "test": "tsx test/mapping.test.ts && tsx test/schema.test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4"
