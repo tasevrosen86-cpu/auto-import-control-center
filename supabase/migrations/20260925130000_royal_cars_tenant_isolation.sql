@@ -36,6 +36,74 @@ update public.mobile_bg_drafts
 alter table public.mobile_bg_drafts
   alter column company_id set default public.current_company_id();
 
+-- The default is not enough on its own. `mobile_bg_drafts.company_id` is NOT
+-- NULL, and the frontend inserts a draft without naming a company, so the
+-- default is what places it. Reading the session works for a broker and for a
+-- company admin, whose profile carries a company. It does not work for the
+-- owner: a system administrator has no company on purpose — the trigger in the
+-- previous migration strips it — so the default yields NULL and the NOT NULL
+-- constraint rejects the insert before any policy is consulted. The owner, who
+-- the menu deliberately sends through the same publishing workflow as a company
+-- user, could not create a draft at all.
+--
+-- So the company is resolved in a BEFORE INSERT trigger. The order is: the row
+-- already names one; else the parent draft's; else the caller's own; else, for a
+-- system administrator only, the single active company. Naming one explicitly is
+-- still checked by the INSERT policy, so this cannot be used to file a row into
+-- another firm.
+--
+-- The last step is deliberately the administrator's alone. A broker who has not
+-- been placed in a firm yet must be refused, not quietly filed into whichever
+-- company happens to be the only one: that is the same silent misplacement this
+-- migration exists to prevent, and today it would look correct because one
+-- company exists.
+create or replace function private.fill_company_id()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, private, pg_temp
+as $$
+declare
+  v_company uuid := new.company_id;
+  -- The table that owns the company carries it itself; the two queue tables
+  -- reach it through the draft they belong to. `mobile_bg_drafts` has no
+  -- `draft_id`, so the lookup is skipped for it rather than casting a null.
+  v_draft_id uuid := case
+    when tg_table_name <> 'mobile_bg_drafts' then (to_jsonb(new) ->> 'draft_id')::uuid
+    else null
+  end;
+  v_active_company uuid;
+  v_active_count integer;
+begin
+  if v_company is null and v_draft_id is not null then
+    select d.company_id into v_company
+    from public.mobile_bg_drafts d
+    where d.id = v_draft_id;
+  end if;
+
+  if v_company is null then
+    v_company := public.current_company_id();
+  end if;
+
+  if v_company is null and public.is_system_admin() then
+    select count(*), min(c.id) into v_active_count, v_active_company
+    from public.companies c
+    where c.status = 'ACTIVE';
+    if v_active_count = 1 then
+      v_company := v_active_company;
+    end if;
+  end if;
+
+  if v_company is null then
+    raise exception 'Фирмата не можа да бъде определена. Задайте company_id изрично.'
+      using errcode = '23502';
+  end if;
+
+  new.company_id := v_company;
+  return new;
+end;
+$$;
+
 -- ============================================================
 -- 2. company_id on the publishing queue
 -- ============================================================
@@ -69,6 +137,24 @@ create index if not exists idx_source_jobs_company on public.source_listing_jobs
 -- ============================================================
 -- 3. Tenant policies for authenticated users
 -- ============================================================
+-- Attached now that all three tables carry `company_id`. The trigger runs
+-- before the INSERT policy, so the policy sees a resolved company rather than a
+-- null the default could not fill.
+drop trigger if exists fill_company_id on public.mobile_bg_drafts;
+create trigger fill_company_id
+  before insert on public.mobile_bg_drafts
+  for each row execute function private.fill_company_id();
+
+drop trigger if exists fill_company_id on public.mobile_bg_publish_jobs;
+create trigger fill_company_id
+  before insert on public.mobile_bg_publish_jobs
+  for each row execute function private.fill_company_id();
+
+drop trigger if exists fill_company_id on public.source_listing_jobs;
+create trigger fill_company_id
+  before insert on public.source_listing_jobs
+  for each row execute function private.fill_company_id();
+
 -- Every policy that named `anon` or `authenticated` on these tables is removed
 -- and replaced by a pair per table: one for `anon`, unchanged in effect, and one
 -- for `authenticated`, scoped to the caller's company.

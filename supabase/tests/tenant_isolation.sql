@@ -446,4 +446,47 @@ begin
   end if;
 end $$;
 
+-- ============================================================
+-- The owner can publish without holding a company
+-- ============================================================
+-- A system administrator has no `company_id` on purpose, and the frontend
+-- inserts a draft without naming a company — it relies on the column default.
+-- That default reads the session, which for the owner yields null, and the
+-- column is NOT NULL: the insert failed before any policy was consulted. The
+-- menu sends the owner through the same publishing workflow as a company user,
+-- so this was the owner's own path. `private.fill_company_id` resolves it.
+set local role authenticated;
+
+do $$
+declare
+  v_admin uuid := current_setting('test.admin')::uuid;
+  v_royal uuid := current_setting('test.royal')::uuid;
+  v_draft uuid;
+  v_job_company uuid;
+  v_draft_company uuid;
+begin
+  perform set_config('request.jwt.claim.sub', v_admin::text, true);
+
+  insert into public.mobile_bg_drafts (title, status, source_type)
+  values ('OWNER UNPLACED', 'DRAFT', 'encar')
+  returning id, company_id into v_draft, v_draft_company;
+
+  if v_draft_company is null then
+    raise exception 'the owner''s draft landed with no company';
+  end if;
+  if v_draft_company <> v_royal then
+    raise exception 'the owner''s draft went to % instead of Royal Cars BG', v_draft_company;
+  end if;
+
+  -- The queue tables follow the draft rather than the session, which is what
+  -- makes a job belong to the same firm as the listing it publishes.
+  insert into public.mobile_bg_publish_jobs (draft_id, status)
+  values (v_draft, 'QUEUED')
+  returning company_id into v_job_company;
+
+  if v_job_company <> v_royal then
+    raise exception 'the owner''s publish job went to % instead of Royal Cars BG', v_job_company;
+  end if;
+end $$;
+
 rollback;
