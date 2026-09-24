@@ -59,6 +59,34 @@ jobs:
             printf 'WORKER_NAME=%s\n' 'aicc-mobile-publisher'
           } > mobile-publisher.env
 
+      # The «Обяви» API publisher gets its own environment file. It talks to the
+      # official Mobile.bg import API, which is a different credential path from
+      # the Browser Use flow, so the files are kept apart. The credentials are
+      # the same Mobile.bg account because the API is authorised per account.
+      - name: Prepare API publisher environment
+        env:
+          MOBILE_BG_USERNAME: ${{ secrets.MOBILE_BG_USERNAME }}
+          MOBILE_BG_PASSWORD: ${{ secrets.MOBILE_BG_PASSWORD }}
+        run: |
+          umask 077
+          {
+            printf 'SUPABASE_URL=%s\n' 'https://cgftjqwebvddtsbcbeml.supabase.co'
+            printf 'SUPABASE_ANON_KEY=%s\n' 'sb_publishable_3szh1-AiAAUYDeVBwO7bJQ_gXhkBU0A'
+            printf 'MOBILE_BG_API_USERNAME=%s\n' "$MOBILE_BG_USERNAME"
+            printf 'MOBILE_BG_API_PASSWORD=%s\n' "$MOBILE_BG_PASSWORD"
+            printf 'MOBILE_BG_API_BASE_URL=%s\n' 'https://api.mobile.bg'
+            printf 'MOBILE_BG_API_EXTRI_SEPARATOR=%s\n' '~'
+            # Pictures are written into the public web root and fetched by
+            # Mobile.bg from the domain registered against the account. The base
+            # URL is what the reachability check verifies against, so it must be
+            # the registered domain exactly.
+            printf 'MOBILE_BG_API_PICTURE_ROOT=%s\n' '/var/www/html'
+            printf 'MOBILE_BG_API_PICTURE_BASE_URL=%s\n' 'https://autoimportcontrolcenter.biz'
+            printf 'MOBILE_BG_API_PICTURE_PREFIX=%s\n' ''
+            printf 'MOBILE_BG_API_TERM=%s\n' '35'
+            printf 'WORKER_NAME=%s\n' 'aicc-mobile-bg-api-publisher'
+          } > mobile-bg-api.env
+
       # The Publications section keeps its own environment file. It is a
       # separate secret set on purpose: the Browser Use token must never be
       # mixed into the «Обяви» publisher, and the two flows are not meant to
@@ -110,8 +138,10 @@ jobs:
           tar -C dist -czf dist.tar.gz .
           tar -C services/source-intake-worker -czf worker.tar.gz src package.json
           tar -C services/mobile-publisher -czf mobile-publisher.tar.gz src package.json package-lock.json
+          tar -C services/mobile-bg-api-publisher -czf mobile-bg-api-publisher.tar.gz src package.json package-lock.json
           tar -C services/publications-publisher -czf publications-publisher.tar.gz src package.json package-lock.json
           scp -P "$VPS_PORT" dist.tar.gz worker.tar.gz mobile-publisher.tar.gz mobile-publisher.env \
+            mobile-bg-api-publisher.tar.gz mobile-bg-api.env \
             publications-publisher.tar.gz publications.env "$VPS_USER@$VPS_HOST:/tmp/"
 
           ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" 'bash -s' <<'REMOTE_SCRIPT'
@@ -175,6 +205,30 @@ jobs:
           sudo install -m 600 /tmp/mobile-publisher.env /etc/aicc-mobile-publisher.env
           rm -f /tmp/dist.tar.gz /tmp/worker.tar.gz /tmp/mobile-publisher.tar.gz /tmp/mobile-publisher.env
 
+          # The «Обяви» API publisher. It is intentionally a third, separate
+          # worker: it talks to the official Mobile.bg import API rather than
+          # driving a browser, so it needs no Chromium, no VNC and no X server,
+          # and a failure in it cannot affect the Browser Use path.
+          API_PUBLISHER_DIR="$APP_DIR/services/mobile-bg-api-publisher"
+          mkdir -p "$API_PUBLISHER_DIR"
+          tar -xzf /tmp/mobile-bg-api-publisher.tar.gz -C "$API_PUBLISHER_DIR"
+          cd "$API_PUBLISHER_DIR"
+          npm ci
+          sudo install -m 600 /tmp/mobile-bg-api.env /etc/aicc-mobile-bg-api.env
+          rm -f /tmp/mobile-bg-api-publisher.tar.gz /tmp/mobile-bg-api.env
+
+          # The service runs as `ubuntu`, but /var/www/html is owned by root.
+          # Mobile.bg fetches the pictures from that directory over HTTPS, so the
+          # worker has to be able to write there. Only the upload subdirectory is
+          # opened up, so the deployed site itself stays root-owned and a
+          # compromise of the worker cannot rewrite the application.
+          sudo mkdir -p /var/www/html/mobilebg-pictures
+          sudo chown -R ubuntu:www-data /var/www/html/mobilebg-pictures
+          sudo chmod -R 755 /var/www/html/mobilebg-pictures
+          # A deploy copies the built site over /var/www/html. `cp -a` merges
+          # rather than replaces, so the picture directory survives it.
+          echo "API publisher installed; picture directory is writable by the worker."
+
           # The Publications publisher is a second, separate worker. It gets its
           # own directory, its own environment file and its own timer, so a
           # problem in one flow cannot stop the other.
@@ -233,6 +287,45 @@ jobs:
           if ! sudo systemctl start aicc-mobile-publisher.service; then
             sudo journalctl -u aicc-mobile-publisher.service -n 80 --no-pager
             exit 1
+          fi
+
+          sudo tee /etc/systemd/system/aicc-mobile-bg-api-publisher.service >/dev/null <<UNIT
+          [Unit]
+          Description=Auto Import Control Center Mobile.bg official API publisher
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=oneshot
+          User=ubuntu
+          WorkingDirectory=$API_PUBLISHER_DIR
+          $SOURCE_ENV_LINE
+          EnvironmentFile=/etc/aicc-mobile-bg-api.env
+          ExecStart=$NPM_BIN run run-once
+          UNIT
+
+          sudo tee /etc/systemd/system/aicc-mobile-bg-api-publisher.timer >/dev/null <<UNIT
+          [Unit]
+          Description=Run the Mobile.bg API publisher for queued OFFICIAL_API jobs
+
+          [Timer]
+          OnBootSec=45s
+          OnUnitActiveSec=60s
+          Persistent=true
+          Unit=aicc-mobile-bg-api-publisher.service
+
+          [Install]
+          WantedBy=timers.target
+          UNIT
+
+          sudo systemctl daemon-reload
+          sudo systemctl enable --now aicc-mobile-bg-api-publisher.timer
+          # A failure here is reported but must not fail the deploy: the site and
+          # the existing browser publisher are unaffected by it, and the API
+          # path can be diagnosed from the panel afterwards.
+          if ! sudo systemctl start aicc-mobile-bg-api-publisher.service; then
+            echo "::warning::API publisher did not start; see journal below."
+            sudo journalctl -u aicc-mobile-bg-api-publisher.service -n 80 --no-pager || true
           fi
 
           # Publications: its own unit and timer, same shape as the one above but

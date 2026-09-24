@@ -522,9 +522,13 @@ async function launchBrowser() {
 }
 
 async function run() {
+  // Scoped to this worker's transport. The same table now carries OFFICIAL_API
+  // jobs for the API publisher, which must never be driven through a browser —
+  // without this filter the two workers would each pick up the other's work.
   const { data: candidate, error: findError } = await db
     .from('mobile_bg_publish_jobs')
     .select('id,draft_id,mode')
+    .eq('transport', 'BROWSER_ON_DEMAND')
     .eq('status', 'QUEUED')
     .order('requested_at', { ascending: true })
     .limit(1)
