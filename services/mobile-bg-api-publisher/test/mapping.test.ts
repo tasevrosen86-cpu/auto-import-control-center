@@ -399,6 +399,67 @@ await check('основната снимка е първа', async () => {
   assert.equal(batch.pictures[0].source_url, 'https://example.com/main.jpg');
 });
 
+await check('праща се само маркираното, не всичко изтеглено', async () => {
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+  const impl = (async () => new Response(new Uint8Array(jpeg), { status: 200 })) as unknown as typeof fetch;
+  const batch = await preparePictures(
+    [
+      { source_url: 'https://example.com/1.jpg', local_path: null, is_selected: true, is_main: false, display_order: 1 },
+      { source_url: 'https://example.com/2.jpg', local_path: null, is_selected: false, is_main: false, display_order: 2 },
+      { source_url: 'https://example.com/3.jpg', local_path: null, is_selected: true, is_main: false, display_order: 3 },
+    ],
+    { draftId: 'd5', publicRoot: '/tmp/aicc-api-test-root', fetchImpl: impl },
+  );
+  assert.equal(batch.pictures.length, 2, 'немаркираната снимка не се изпраща');
+  assert.deepEqual(
+    batch.pictures.map(picture => picture.source_url),
+    ['https://example.com/1.jpg', 'https://example.com/3.jpg'],
+  );
+});
+
+await check('праща първите 17 по подредба, независимо от реда на редовете', async () => {
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+  const impl = (async () => new Response(new Uint8Array(jpeg), { status: 200 })) as unknown as typeof fetch;
+  // 18 marked, handed over in a shuffled order. The batch is the first 17 by
+  // display_order, which is the same 17 the database trigger leaves selected and
+  // the same 17 the screen calls "the first 17".
+  const images = Array.from({ length: 18 }, (_, index) => ({
+    source_url: `https://example.com/p${index + 1}.jpg`,
+    local_path: null,
+    is_selected: true,
+    is_main: index === 0,
+    display_order: index + 1,
+  }));
+  const shuffled = [images[5], images[17], images[0], ...images.filter((_, index) => ![0, 5, 17].includes(index))];
+  const batch = await preparePictures(shuffled, { draftId: 'd6', publicRoot: '/tmp/aicc-api-test-root', fetchImpl: impl });
+  assert.equal(batch.pictures.length, 17);
+  const sent = batch.pictures.map(picture => picture.source_url);
+  assert.ok(sent.includes('https://example.com/p17.jpg'), 'седемнадесетата по подредба остава');
+  assert.ok(!sent.includes('https://example.com/p18.jpg'), 'осемнадесетата по подредба отпада');
+  assert.equal(batch.pictures[0].source_url, 'https://example.com/p1.jpg', 'основната се праща първа');
+});
+
+await check('основната снимка се праща първа, без да разбърква бройката', async () => {
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+  const impl = (async () => new Response(new Uint8Array(jpeg), { status: 200 })) as unknown as typeof fetch;
+  // The cover is the tenth by display_order, so it is inside the first 17 and
+  // must lead the request without changing which photos are in it.
+  const images = Array.from({ length: 20 }, (_, index) => ({
+    source_url: `https://example.com/p${index + 1}.jpg`,
+    local_path: null,
+    is_selected: index < 17,
+    is_main: index === 9,
+    display_order: index + 1,
+  }));
+  const batch = await preparePictures(images, { draftId: 'd7', publicRoot: '/tmp/aicc-api-test-root', fetchImpl: impl });
+  assert.equal(batch.pictures.length, 17);
+  assert.equal(batch.pictures[0].source_url, 'https://example.com/p10.jpg');
+  assert.deepEqual(
+    batch.pictures.slice(1).map(picture => picture.source_url),
+    Array.from({ length: 17 }, (_, index) => `https://example.com/p${index + 1}.jpg`).filter(url => !url.endsWith('p10.jpg')),
+  );
+});
+
 // ---------------------------------------------------------------- full flow
 
 await check('пълният поток изпраща обява, после снимки, после проверява', async () => {
