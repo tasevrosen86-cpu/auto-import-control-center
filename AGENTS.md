@@ -317,6 +317,30 @@ Migrations under `supabase/migrations/` are applied by hand in the Supabase SQL
 Editor. Write them idempotent, and guard with `to_regclass(...) is not null` so a
 table recreated by hand in the dashboard cannot fail the run.
 
+Deploy order matters, because the two halves ship separately. A push to `main`
+starts `deploy-vps.yml`, which builds and copies the site to
+autoimportcontrolcenter.biz. Nothing in CI applies migrations — no workflow
+mentions them — so the site can go live against a database that does not yet
+have the tables that build reads. Run the migrations first, then push.
+
+Check whether production has what the deployed site reads, before and after:
+
+```bash
+supabase/tests/verify_production_schema.sh
+```
+
+It uses the public key from the bundle and only reads. `PGRST205` means the
+table is absent — a failed deployment. `42501` means the table is there and the
+anonymous key simply holds no grant, which is the correct answer for anything
+scoped to a signed-in user. `supabase/manual/` holds migrations that are applied
+by hand later, on purpose, because something outside the database has to change
+first; the header of each one says what.
+
+Databases are not reachable as a migration target from here: no
+`SUPABASE_SERVICE_ROLE_KEY`, no `SUPABASE_ACCESS_TOKEN`, no DB password, no
+`psql`, and `apt-get` needs root. Verifying a migration therefore means the
+replay harness below, or asking the owner to run it.
+
 ## Verifying SQL changes
 
 Postgres can be installed locally (`apt-get install -y postgresql`) and the
