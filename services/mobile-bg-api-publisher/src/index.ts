@@ -120,11 +120,19 @@ async function runJob(job: Job): Promise<void> {
       db.from('mobile_bg_draft_fields').select('field_key,value').eq('draft_id', job.draft_id),
       db.from('mobile_bg_draft_extras').select('mobile_bg_label,selected').eq('draft_id', job.draft_id).eq('selected', true),
       db.from('mobile_bg_draft_images').select('source_url,local_path,is_selected,is_main,display_order').eq('draft_id', job.draft_id).order('display_order', { ascending: true }),
-      db.from('mobile_bg_drafts').select('id,title,status,price_eur,extraction_status').eq('id', job.draft_id).maybeSingle(),
+      // Existence only. The row is not read anywhere below, so nothing but `id`
+      // is asked for: a column that the draft table does not have used to make
+      // this the only query in the batch that failed, and the failure surfaced as
+      // "не е намерена" rather than as the schema error it was.
+      db.from('mobile_bg_drafts').select('id').eq('id', job.draft_id).maybeSingle(),
     ]);
     if (fieldResult.error) return await finishJob('FAILED', {}, `Грешка при четене на полетата: ${fieldResult.error.message}`);
     if (extraResult.error) return await finishJob('FAILED', {}, `Грешка при четене на екстрите: ${extraResult.error.message}`);
     if (imageResult.error) return await finishJob('FAILED', {}, `Грешка при четене на снимките: ${imageResult.error.message}`);
+    // Checked before the existence answer, so a refused read is never reported as
+    // a missing draft. That misdiagnosis cost three failed runs on a draft that
+    // existed the whole time.
+    if (draftResult.error) return await finishJob('FAILED', {}, `Грешка при четене на черновата: ${draftResult.error.message}`);
     if (!draftResult.data) return await finishJob('FAILED', {}, 'Черновата не е намерена.');
 
     const fields = (fieldResult.data || []) as Array<{ field_key: string; value: string | null }>;

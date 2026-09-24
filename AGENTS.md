@@ -223,6 +223,30 @@ When adding a derived field here, require the value to follow its key and leave
 the field empty when the source has none. An empty field is visible and the
 broker fills it; a plausible wrong number silently becomes a published listing.
 
+## A refused read is not a missing row
+
+`mobile_bg_drafts` and `publication_drafts` are different tables with different
+column sets. `price_eur` exists on `publication_drafts`; on `mobile_bg_drafts`
+the column is `source_price_eur`. The API publisher asked for `price_eur`, the
+read was refused with `42703`, and because the caller only tested
+`if (!draftResult.data)` the failure was reported as «Черновата не е намерена.»
+Three publishing runs were spent on a draft that existed the whole time.
+
+Two rules come out of it:
+
+* **Check `error` before `data`.** PostgREST answers a bad column with a `400`
+  and no `data`, which is indistinguishable from an absent row unless the error
+  is read. Every query in a batch needs its own check.
+* **Ask for the columns you use.** That draft fetch read `title`, `status`,
+  `price_eur` and `extraction_status` and then used none of them — it was an
+  existence check written as a payload fetch. `select('id')` cannot drift.
+
+`services/mobile-bg-api-publisher/test/schema.test.ts` holds the line: it parses
+the migrations as the schema of record and checks every `select`, `insert` and
+`update` column in the worker against it, so a column that does not exist fails
+`npm test` instead of a live publish. Verified by mutation — putting `price_eur`
+back makes it fail.
+
 ## Deleting a draft for good
 
 «Изтрий» on a draft removes the row and every child row (fields, extras, images,
