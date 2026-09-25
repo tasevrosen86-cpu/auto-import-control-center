@@ -74,10 +74,9 @@ begin
     from public.companies c
     where c.status = 'ACTIVE';
 
-    -- Read in a second statement rather than as `min(c.id)` in this one:
-    -- PostgreSQL has no `min` for `uuid`, and the aggregate fails at run time
-    -- with `42883: function min(uuid) does not exist` — on the owner's very
-    -- first draft, which is the one path this branch exists to fix.
+    -- Read in a second statement rather than as one aggregate: PostgreSQL has
+    -- no `min` for `uuid`, so it fails at run time with `42883` — on the owner's
+    -- very first draft, which is the one path this branch exists to fix.
     if v_active_count = 1 then
       select c.id into v_company
       from public.companies c
@@ -178,9 +177,8 @@ begin
     from public.companies c
     where c.status = 'ACTIVE';
 
-    -- Two statements, not `min(c.id)`: PostgreSQL has no `min` for `uuid`, and
-    -- the aggregate would fail with `42883: function min(uuid) does not exist`
-    -- on the owner's first import.
+    -- Two statements, not one aggregate: PostgreSQL has no `min` for `uuid`,
+    -- so it would fail with `42883` on the owner's first import.
     if v_active_count = 1 then
       select c.id into v_company_id
       from public.companies c
@@ -273,13 +271,13 @@ grant execute on function public.queue_source_intake(text, text, text, text, tex
 -- ============================================================
 -- 3. Verify
 -- ============================================================
--- Neither function may still contain the aggregate. This must return no row.
+-- Neither function may still call the aggregate. This must return no row.
 --
 --   select p.proname
 --   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
 --   where n.nspname in ('public','private')
 --     and p.proname in ('fill_company_id','queue_source_intake')
---     and pg_get_functiondef(p.oid) ilike '%min(c.id)%';
+--     and pg_get_functiondef(p.oid) ~ 'min\(c\.id\)\s+into';
 --
 -- And the resolver must answer rather than abort. With one active company this
 -- returns its id; with two, or none, it returns null and the caller refuses.

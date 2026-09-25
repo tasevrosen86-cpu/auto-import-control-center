@@ -487,10 +487,9 @@ begin
     from public.companies c
     where c.status = 'ACTIVE';
 
-    -- Read in a second statement rather than as `min(c.id)` in this one:
-    -- PostgreSQL has no `min` for `uuid`, and the aggregate fails at run time
-    -- with `42883: function min(uuid) does not exist` — on the owner's very
-    -- first draft, which is the one path this branch exists to fix.
+    -- Read in a second statement rather than as one aggregate: PostgreSQL has
+    -- no `min` for `uuid`, so it fails at run time with `42883` — on the owner's
+    -- very first draft, which is the one path this branch exists to fix.
     if v_active_count = 1 then
       select c.id into v_company
       from public.companies c
@@ -779,9 +778,8 @@ begin
     from public.companies c
     where c.status = 'ACTIVE';
 
-    -- Two statements, not `min(c.id)`: PostgreSQL has no `min` for `uuid`, and
-    -- the aggregate would fail with `42883: function min(uuid) does not exist`
-    -- on the owner's first import.
+    -- Two statements, not one aggregate: PostgreSQL has no `min` for `uuid`,
+    -- so it would fail with `42883` on the owner's first import.
     if v_active_count = 1 then
       select c.id into v_company_id
       from public.companies c
