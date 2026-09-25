@@ -48,9 +48,10 @@
 -- with the wrong argument count is dropped first. Running this migration twice,
 -- or running it after a half-finished attempt, ends in the same state.
 
--- Nothing below this point can work without the tables the previous migration
--- creates. Fail with a message that names what is missing, instead of a
--- syntax-level error forty lines later.
+-- The publishing tables come from the earlier migrations and must be present.
+-- `companies` and `profiles` are deliberately *not* listed here: they are
+-- created a few lines below, because the previous migration stopped before it
+-- finished and this file has to stand on its own.
 do $$
 declare
   missing text;
@@ -58,7 +59,6 @@ begin
   select string_agg(format('public.%s', t), ', ')
     into missing
   from unnest(array[
-    'companies', 'profiles',
     'mobile_bg_drafts', 'mobile_bg_draft_fields', 'mobile_bg_draft_extras',
     'mobile_bg_draft_images', 'mobile_bg_draft_action_log', 'mobile_bg_dedup_checks',
     'mobile_bg_publish_jobs', 'source_listing_jobs'
@@ -70,81 +70,92 @@ begin
 
   if missing is not null then
     raise exception
-      'Липсват таблици: %. Пуснете предишните миграции и стартирайте тази отново.', missing
+      'Липсват таблици: %. Пуснете миграциите за чернови преди тази.', missing
       using errcode = '42P01';
   end if;
 end $$;
 
--- The three triggers from the previous migration are not recreated here, because
--- this migration does not own them — but they are *checked*, because their
--- absence is a security hole and not a cosmetic one. `guard_profile_privileges`
--- is what stops a broker writing `role = 'SYSTEM_ADMIN'` on their own profile
--- row; `normalise_system_admin_profile` is what keeps an administrator out of a
--- firm; `sync_profile_from_auth_user` is what gives a new signup a profile at
--- all. A database missing them looks fine and is not.
+-- ------------------------------------------------------------------
+-- The layer the previous migration was supposed to leave behind
+-- ------------------------------------------------------------------
+-- Production was checked and answered plainly. `private.is_system_admin_email`
+-- exists — that is section 3 of 20260925120000_royal_cars_companies_roles.sql —
+-- and nothing after it does: no `current_company_id`, no `is_system_admin`, no
+-- profile triggers. `mobile_bg_drafts.company_id` still carries the placeholder
+-- default. So that migration stopped in the middle, and everything below section
+-- 3 of it is simply absent.
 --
--- Recreating them here would mean two copies of a security control that could
--- drift apart, so the answer is to say plainly that the earlier migration has to
--- be re-run. It is safe to re-run: every table is `if not exists`, both inserts
--- carry `on conflict`, all nine functions are `create or replace`, and every
--- trigger is preceded by `drop trigger if exists`.
-do $$
-declare
-  missing text;
-begin
-  select string_agg(format('%s on %s.%s', e.trigger_name, e.schema_name, e.table_name), ', ')
-    into missing
-  from (values
-    ('sync_profile_from_auth_user',   'auth',   'users'),
-    ('normalise_system_admin_profile','public', 'profiles'),
-    ('guard_profile_privileges',      'public', 'profiles')
-  ) as e(trigger_name, schema_name, table_name)
-  where not exists (
-    select 1
-    from pg_trigger tg
-    join pg_class c on c.oid = tg.tgrelid
-    join pg_namespace n on n.oid = c.relnamespace
-    where tg.tgname = e.trigger_name
-      and not tg.tgisinternal
-      and n.nspname = e.schema_name
-      and c.relname = e.table_name
-  );
+-- This file therefore defines that layer itself rather than depending on it.
+-- Every statement is idempotent and the definitions are copied from the earlier
+-- migration unchanged, so the two files converge on the same objects: re-running
+-- the earlier one afterwards is a no-op, and it can never be the case that one
+-- of them is right and the other wins.
+--
+-- The three triggers matter more than they look. `guard_profile_privileges` is
+-- what stops a broker writing `role = 'SYSTEM_ADMIN'` on their own row and taking
+-- the whole system. `normalise_system_admin_profile` is what keeps the owner's
+-- `company_id` null — which is the single-account model, and also what the insert
+-- trigger and the intake function read as "this caller holds no firm, so ask
+-- which one". `sync_profile_from_auth_user` is what gives a new signup a profile
+-- at all.
 
-  if missing is not null then
-    raise exception
-      'Липсват тригери от предишната миграция: %. Пуснете 20260925120000_royal_cars_companies_roles.sql отново и след това стартирайте тази. Без тях всеки брокер може да си даде роля SYSTEM_ADMIN.',
-      missing
-      using errcode = '42704';
+-- ----------------------------------------------------------------
+-- companies and profiles
+-- ----------------------------------------------------------------
+create table if not exists public.companies (
+  id uuid primary key default gen_random_uuid(),
+  slug text not null unique,
+  name text not null,
+  status text not null default 'ACTIVE',
+  legal_name text,
+  phone text,
+  contact_email text,
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.companies enable row level security;
+
+-- `company_id` is nullable on purpose: someone who has just signed up has no
+-- company until an administrator places them, and that is a real state rather
+-- than an error. `can_access_company` grants them nothing, so they can sign in
+-- and be told to wait.
+create table if not exists public.profiles (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  company_id uuid references public.companies(id) on delete restrict,
+  role text not null default 'BROKER',
+  full_name text,
+  email text,
+  phone text,
+  status text not null default 'ACTIVE',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- The constraint is added separately so that a table created by an earlier run
+-- of the previous migration, with or without it, ends up with exactly one.
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.profiles'::regclass
+      and conname = 'profiles_role_check'
+  ) then
+    alter table public.profiles
+      add constraint profiles_role_check
+      check (role in ('SYSTEM_ADMIN', 'COMPANY_ADMIN', 'BROKER'));
   end if;
 end $$;
 
--- Any `current_company_id`, `current_profile_role`, `is_system_admin`,
--- `is_company_admin` or `can_access_company` with the wrong number of arguments
--- is a leftover, and a leftover is what makes a call ambiguous. `regprocedure`
--- prints the signature with its types, which is what `drop` needs.
-do $$
-declare
-  leftover record;
-begin
-  for leftover in
-    select p.oid::regprocedure::text as signature
-    from pg_proc p
-    join pg_namespace n on n.oid = p.pronamespace
-    where n.nspname = 'public'
-      and (
-        (p.proname = 'can_access_company' and p.pronargs <> 1)
-        or (p.proname in ('current_company_id', 'current_profile_role',
-                          'is_system_admin', 'is_company_admin')
-            and p.pronargs <> 0)
-      )
-  loop
-    execute format('drop function if exists %s', leftover.signature);
-  end loop;
-end $$;
+create index if not exists idx_profiles_company on public.profiles(company_id);
+create index if not exists idx_profiles_role on public.profiles(role);
 
--- The list of administrator emails, and the reader for it. Recreated rather than
--- assumed: `is_system_admin()` below consults it, and a database where this table
--- is missing would silently demote the owner.
+alter table public.profiles enable row level security;
+
+-- ----------------------------------------------------------------
+-- The administrator list, and the four helpers
+-- ----------------------------------------------------------------
 create schema if not exists private;
 
 create table if not exists private.system_admins (
@@ -176,7 +187,31 @@ $$;
 revoke all on function private.is_system_admin_email(text) from public;
 grant execute on function private.is_system_admin_email(text) to anon, authenticated, service_role;
 
--- The four helpers, in dependency order.
+-- The wrong-arity sweep runs *before* the helpers are written, so a leftover
+-- cannot make the next statement ambiguous. `create or replace function f()` is
+-- the only form that omits the argument list; `create or replace function
+-- f(uuid)` would create a second function, and a zero-argument call then
+-- resolves to neither.
+do $$
+declare
+  leftover record;
+begin
+  for leftover in
+    select p.oid::regprocedure::text as signature
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname in ('public', 'private')
+      and (
+        (p.proname in ('can_access_company', 'is_system_admin_email') and p.pronargs <> 1)
+        or (p.proname in ('current_company_id', 'current_profile_role',
+                          'is_system_admin', 'is_company_admin')
+            and p.pronargs <> 0)
+      )
+  loop
+    execute format('drop function if exists %s', leftover.signature);
+  end loop;
+end $$;
+
 create or replace function public.current_profile_role()
 returns text
 language sql
@@ -226,13 +261,13 @@ as $$
   );
 $$;
 
--- The single tenant predicate, and it is defined once — here — because two
--- definitions of `can_access_company` that differ only in the `p.status` test
--- are exactly the kind of drift this migration exists to remove.
+-- The single tenant predicate, defined once, here, for the same reason the
+-- helpers above are: two definitions differing only in the suspended-broker test
+-- is the drift this migration exists to remove.
 --
--- The `status = 'ACTIVE'` test is what takes a suspended broker's access away
--- without touching their login. A system administrator short-circuits before it,
--- so nothing here narrows the owner's access.
+-- `status = 'ACTIVE'` is what takes a suspended broker's access away without
+-- touching their login. A system administrator short-circuits before it, so
+-- nothing here narrows the owner's access.
 create or replace function public.can_access_company(target uuid)
 returns boolean
 language sql
@@ -263,13 +298,98 @@ grant execute on function public.is_system_admin() to anon, authenticated, servi
 grant execute on function public.is_company_admin() to anon, authenticated, service_role;
 grant execute on function public.can_access_company(uuid) to anon, authenticated, service_role;
 
--- The owner's own profile. A migration numbered before this one creates it, but
--- a partial run of that migration can stop before it does, and then the account
--- that has to administer everything would depend on the email fallback alone.
--- Re-asserted here: the role is SYSTEM_ADMIN and `company_id` is null, which is
--- what keeps one account global instead of pinning it to a firm. `company_id`
--- null is also what the insert trigger and the intake function recognise as "this
--- caller holds no firm, so ask which one".
+-- ----------------------------------------------------------------
+-- The three profile triggers
+-- ----------------------------------------------------------------
+create or replace function private.sync_profile_from_auth_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, private, pg_temp
+as $$
+declare
+  v_admin boolean := private.is_system_admin_email(new.email);
+begin
+  insert into public.profiles (user_id, email, role, company_id, full_name, status)
+  values (
+    new.id,
+    new.email,
+    case when v_admin then 'SYSTEM_ADMIN' else 'BROKER' end,
+    null,
+    coalesce(new.raw_user_meta_data ->> 'full_name', split_part(coalesce(new.email, ''), '@', 1)),
+    'ACTIVE'
+  )
+  on conflict (user_id) do update
+    set email = excluded.email,
+        role = case when v_admin then 'SYSTEM_ADMIN' else public.profiles.role end,
+        company_id = case when v_admin then null else public.profiles.company_id end,
+        updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists sync_profile_from_auth_user on auth.users;
+create trigger sync_profile_from_auth_user
+  after insert or update of email on auth.users
+  for each row execute function private.sync_profile_from_auth_user();
+
+create or replace function private.normalise_system_admin_profile()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if new.role = 'SYSTEM_ADMIN' then
+    new.company_id := null;
+  end if;
+  new.updated_at := now();
+  return new;
+end;
+$$;
+
+drop trigger if exists normalise_system_admin_profile on public.profiles;
+create trigger normalise_system_admin_profile
+  before insert or update on public.profiles
+  for each row execute function private.normalise_system_admin_profile();
+
+create or replace function private.guard_profile_privileges()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, private, pg_temp
+as $$
+begin
+  if (select auth.uid()) is null then
+    return new;
+  end if;
+
+  if new.role is distinct from old.role
+     or new.company_id is distinct from old.company_id
+     or new.status is distinct from old.status then
+    if not (public.is_system_admin() or public.is_company_admin()) then
+      raise exception 'Само администратор може да променя роля, фирма или статус.'
+        using errcode = '42501';
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists guard_profile_privileges on public.profiles;
+create trigger guard_profile_privileges
+  before update on public.profiles
+  for each row execute function private.guard_profile_privileges();
+
+-- ----------------------------------------------------------------
+-- The owner's own profile
+-- ----------------------------------------------------------------
+-- The account already exists in `auth.users`, so the signup trigger never fires
+-- for it. `company_id` stays null: one account, global, matching every firm
+-- without belonging to one. The name is left as it is if a profile already
+-- exists, and taken from the email address otherwise — reading
+-- `raw_user_meta_data` here would tie a migration to a schema it does not own.
 insert into public.profiles (user_id, email, role, company_id, full_name, status)
 select u.id, u.email, 'SYSTEM_ADMIN', null,
        split_part(coalesce(u.email, ''), '@', 1),
@@ -290,9 +410,18 @@ on conflict (slug) do nothing;
 
 -- Everything created until now belongs to Royal Cars BG, which is the company
 -- the owner actually operates. The placeholder UUID was never a tenant.
+--
+-- The second condition catches a draft pointing at a company that does not
+-- exist — a leftover from a half-finished attempt, or a hand-edit. Such a row
+-- would be readable only by a system administrator once the policies below are
+-- in place, so it would silently vanish from the screen of the broker who
+-- created it. Reclassifying it is the same judgement as the placeholder: until
+-- there is more than one firm, every existing draft is Royal Cars BG's.
 update public.mobile_bg_drafts
    set company_id = (select id from public.companies where slug = 'royal-cars-bg')
- where company_id = '00000000-0000-0000-0000-000000000000';
+ where company_id = '00000000-0000-0000-0000-000000000000'
+    or company_id is null
+    or not exists (select 1 from public.companies c where c.id = company_id);
 
 -- A draft without a company can no longer be read by anyone, so a forgotten
 -- insert must fail at the database rather than disappear from every screen.
