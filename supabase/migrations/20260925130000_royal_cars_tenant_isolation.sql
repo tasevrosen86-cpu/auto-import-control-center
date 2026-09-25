@@ -48,8 +48,9 @@
 -- with the wrong argument count is dropped first. Running this migration twice,
 -- or running it after a half-finished attempt, ends in the same state.
 
--- Nothing below this point can work without these tables. Fail with a message
--- that says which one, instead of a syntax-level error forty lines later.
+-- Nothing below this point can work without the tables the previous migration
+-- creates. Fail with a message that names what is missing, instead of a
+-- syntax-level error forty lines later.
 do $$
 declare
   missing text;
@@ -71,6 +72,49 @@ begin
     raise exception
       'Липсват таблици: %. Пуснете предишните миграции и стартирайте тази отново.', missing
       using errcode = '42P01';
+  end if;
+end $$;
+
+-- The three triggers from the previous migration are not recreated here, because
+-- this migration does not own them — but they are *checked*, because their
+-- absence is a security hole and not a cosmetic one. `guard_profile_privileges`
+-- is what stops a broker writing `role = 'SYSTEM_ADMIN'` on their own profile
+-- row; `normalise_system_admin_profile` is what keeps an administrator out of a
+-- firm; `sync_profile_from_auth_user` is what gives a new signup a profile at
+-- all. A database missing them looks fine and is not.
+--
+-- Recreating them here would mean two copies of a security control that could
+-- drift apart, so the answer is to say plainly that the earlier migration has to
+-- be re-run. It is safe to re-run: every table is `if not exists`, both inserts
+-- carry `on conflict`, all nine functions are `create or replace`, and every
+-- trigger is preceded by `drop trigger if exists`.
+do $$
+declare
+  missing text;
+begin
+  select string_agg(format('%s on %s.%s', e.trigger_name, e.schema_name, e.table_name), ', ')
+    into missing
+  from (values
+    ('sync_profile_from_auth_user',   'auth',   'users'),
+    ('normalise_system_admin_profile','public', 'profiles'),
+    ('guard_profile_privileges',      'public', 'profiles')
+  ) as e(trigger_name, schema_name, table_name)
+  where not exists (
+    select 1
+    from pg_trigger tg
+    join pg_class c on c.oid = tg.tgrelid
+    join pg_namespace n on n.oid = c.relnamespace
+    where tg.tgname = e.trigger_name
+      and not tg.tgisinternal
+      and n.nspname = e.schema_name
+      and c.relname = e.table_name
+  );
+
+  if missing is not null then
+    raise exception
+      'Липсват тригери от предишната миграция: %. Пуснете 20260925120000_royal_cars_companies_roles.sql отново и след това стартирайте тази. Без тях всеки брокер може да си даде роля SYSTEM_ADMIN.',
+      missing
+      using errcode = '42704';
   end if;
 end $$;
 
