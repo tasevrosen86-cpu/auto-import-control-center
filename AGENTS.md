@@ -840,6 +840,36 @@ hardcoding a guess, and `send()` is the single place to change once the real
 relay is known. If the gateway does not relay arbitrary CDP methods, that one
 function is rewritten; `form.mjs` stays as it is.
 
+## The Master Catalog stays a JSON file in the bundle, for now
+
+`src/data/master_catalog_v40.json` is imported directly by `src/lib/catalog.ts`,
+and `catalogSorted`, `catalogStats` and the filter helpers are **synchronous
+constants** computed at module load. `VehicleList` reads them without awaiting
+anything. That is the working shape on `main`, and it is deliberate: the catalogue
+is still being edited — makes, models and rows are added and corrected — so
+moving it into a table now would mean re-importing 4674 rows on every change.
+
+An earlier change on `feat/royal-cars-tenant-stage-1` rewrote `catalog.ts` to read
+from a `master_catalog` table and made `loadCatalog()` async, and moved the JSON
+out of `src/data/`. That is wrong for now and was reverted. **Do not reintroduce
+it.** Specifically:
+
+* `catalog.ts` must keep importing the JSON, and its exports must stay
+  synchronous. Changing `loadCatalog()` to return a promise turns every caller
+  into a loading state, and there is exactly one caller today.
+* The file must stay at `src/data/`, because the import alias is `@/*` → `src/*`.
+  A copy in a top-level `data/` is outside the alias and outside `tsconfig`'s
+  `include`, so `@/data/...` stops resolving.
+* The `master_catalog` table exists and is administrator-only, but it is **empty
+  on purpose**. A frontend that reads it sees nothing at all. Do not fill it.
+
+When the catalogue is final, the move is a separate decision — either replace the
+JSON file wholesale, or import it into the table with
+`scripts/load_master_catalog.ts` and change `catalog.ts` in the same commit. Until
+then, the JSON in the bundle is the catalogue of record, and the build is ~9 MB
+because of it.
+
+
 ## Migrations are applied by hand, and the SQL Editor is not transactional
 
 `supabase/migrations/` is applied by pasting each file into the Supabase SQL

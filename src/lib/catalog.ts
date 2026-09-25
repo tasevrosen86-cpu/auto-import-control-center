@@ -1,4 +1,4 @@
-import { supabase } from '@/lib/supabase';
+import masterCatalog from '@/data/master_catalog_v40.json';
 import type { VehicleWithMarketplace, VehicleMarketplace, Marketplace } from '@/types';
 
 interface CatalogRecord {
@@ -90,95 +90,6 @@ function fuelRank(fuel: string): number {
   return FUEL_ORDER[fuel] ?? 99;
 }
 
-export interface CatalogDataset {
-  records: VehicleWithMarketplace[];
-  sorted: VehicleWithMarketplace[];
-  stats: { total: number; active: number; review: number; noValid: number; publishedBg: number };
-  filterOptions: { makes: string[]; fuels: string[]; models: string[] };
-  years: number[];
-}
-
-function buildDataset(records: VehicleWithMarketplace[]): CatalogDataset {
-  const sorted = [...records].sort((a, b) => {
-    const fr = fuelRank(a.fuel) - fuelRank(b.fuel);
-    if (fr !== 0) return fr;
-    const mk = a.make.localeCompare(b.make, 'bg');
-    if (mk !== 0) return mk;
-    const md = a.model.localeCompare(b.model, 'bg');
-    if (md !== 0) return md;
-    return b.model_year - a.model_year;
-  });
-
-  return {
-    records,
-    sorted,
-    stats: {
-      total: sorted.length,
-      active: sorted.filter((v) => v.status === 'ACTIVE').length,
-      review: sorted.filter((v) => v.flags_needs_review).length,
-      noValid: sorted.filter((v) => v.status === 'NO_VALID_REPLACEMENT').length,
-      publishedBg: sorted.filter((v) =>
-        v.vehicle_marketplace.some((m) => m.marketplace === 'mobile_bg' && m.publication_status === 'PUBLISHED'),
-      ).length,
-    },
-    filterOptions: {
-      makes: Array.from(new Set(sorted.map((v) => v.make))).sort((a, b) => a.localeCompare(b, 'bg')),
-      fuels: Array.from(new Set(sorted.map((v) => v.fuel))).sort((a, b) => fuelRank(a) - fuelRank(b)),
-      models: Array.from(new Set(sorted.map((v) => v.model))).sort((a, b) => a.localeCompare(b, 'bg')),
-    },
-    years: Array.from(new Set(sorted.map((v) => v.model_year))).sort((a, b) => b - a),
-  };
-}
-
-/**
- * Reads the internal Cars Catalog from the database.
- *
- * It used to be a 12 MB JSON file imported by this module, which meant every
- * visitor downloaded all 4674 rows in the JavaScript bundle and the only thing
- * hiding it from a company was a menu entry that was not rendered. The table it
- * now comes from carries a policy that returns rows only to a system
- * administrator, so a broker or a company admin who asks the API directly is
- * given nothing. Reading a car for a draft a broker owns goes through
- * `master_catalog_card`, which is a separate and much narrower question.
- *
- * The rows are returned by the database in the shape the rest of the module
- * already worked with, so the mapping below is unchanged.
- */
-export async function loadCatalog(): Promise<CatalogDataset> {
-  const { data, error } = await supabase
-    .from('master_catalog')
-    .select('permanent_id, stable_key, make, model, model_year, fuel, priority, status, company_status, our_price_eur, payload')
-    .order('make', { ascending: true });
-
-  if (error) throw new Error(error.message);
-
-  const records = ((data || []) as MasterCatalogRow[]).map((row) => mapRecord(row));
-  return buildDataset(records);
-}
-
-export function getCatalogModelsForMake(dataset: CatalogDataset, make: string): string[] {
-  return Array.from(
-    new Set(dataset.sorted.filter((v) => v.make === make).map((v) => v.model)),
-  ).sort((a, b) => a.localeCompare(b, 'bg'));
-}
-
-export function filterCatalog(dataset: CatalogDataset, opts: {
-  make: string;
-  model: string;
-  fuel: string;
-  yearFrom: string;
-  yearTo: string;
-}): VehicleWithMarketplace[] {
-  return dataset.sorted.filter((v) => {
-    if (opts.make !== 'ALL' && v.make !== opts.make) return false;
-    if (opts.model !== 'ALL' && v.model !== opts.model) return false;
-    if (opts.fuel !== 'ALL' && v.fuel !== opts.fuel) return false;
-    if (opts.yearFrom !== 'ALL' && v.model_year < Number(opts.yearFrom)) return false;
-    if (opts.yearTo !== 'ALL' && v.model_year > Number(opts.yearTo)) return false;
-    return true;
-  });
-}
-
 function mapMarketplace(
   mp: Marketplace,
   rec: CatalogRecord,
@@ -219,42 +130,23 @@ function mapMarketplace(
   };
 }
 
-interface MasterCatalogRow {
-  permanent_id: number;
-  stable_key: string | null;
-  make: string | null;
-  model: string | null;
-  model_year: number | null;
-  fuel: string | null;
-  priority: number | null;
-  status: string | null;
-  company_status: string | null;
-  our_price_eur: number | null;
-  payload: Record<string, unknown> | null;
-}
-
-function mapRecord(row: MasterCatalogRow): VehicleWithMarketplace {
-  // The row keeps the whole original catalogue record in `payload`, so the
-  // per-marketplace detail is read from there and the columns are the filterable
-  // summary the table exposes.
-  const rec = (row.payload || {}) as unknown as CatalogRecord;
-
-  const marketplaces: VehicleWithMarketplace['vehicle_marketplace'] = [];
+function mapRecord(rec: CatalogRecord): VehicleWithMarketplace {
+  const marketplaces: VehicleMarketplace[] = [];
   if (rec.korea) marketplaces.push(mapMarketplace('korea', rec));
   if (rec.canada) marketplaces.push(mapMarketplace('canada', rec));
   if (rec.mobile_bg) marketplaces.push(mapMarketplace('mobile_bg', rec));
 
   return {
-    permanent_id: row.permanent_id,
-    stable_key: row.stable_key ?? rec.stable_key ?? '',
-    make: row.make ?? rec.make ?? '',
-    model: row.model ?? rec.model ?? '',
-    model_year: row.model_year ?? rec.model_year ?? 0,
-    fuel: row.fuel ?? rec.fuel ?? '',
-    priority: row.priority ?? rec.priority ?? 0,
-    status: (row.company_status || row.status || rec.status || 'ACTIVE') as VehicleWithMarketplace['status'],
-    our_price_eur: row.our_price_eur ?? rec.our_price_eur ?? null,
-    notes: rec.notes ?? null,
+    permanent_id: rec.permanent_id,
+    stable_key: rec.stable_key,
+    make: rec.make,
+    model: rec.model,
+    model_year: rec.model_year,
+    fuel: rec.fuel,
+    priority: rec.priority,
+    status: rec.status,
+    our_price_eur: rec.our_price_eur,
+    notes: rec.notes,
     flags_needs_review: rec.flags?.needs_human_review ?? false,
     flags_reasons: rec.flags?.reasons ?? [],
     raw_json: rec as unknown as Record<string, unknown>,
@@ -265,4 +157,57 @@ function mapRecord(row: MasterCatalogRow): VehicleWithMarketplace {
     deleted_at: null,
     vehicle_marketplace: marketplaces,
   };
+}
+
+const rawRecords: CatalogRecord[] = (masterCatalog as { catalog: CatalogRecord[] }).catalog;
+
+export const catalogRecords: VehicleWithMarketplace[] = rawRecords.map(mapRecord);
+
+export const catalogSorted: VehicleWithMarketplace[] = [...catalogRecords].sort((a, b) => {
+  const fr = fuelRank(a.fuel) - fuelRank(b.fuel);
+  if (fr !== 0) return fr;
+  const mk = a.make.localeCompare(b.make, 'bg');
+  if (mk !== 0) return mk;
+  const md = a.model.localeCompare(b.model, 'bg');
+  if (md !== 0) return md;
+  return b.model_year - a.model_year;
+});
+
+export const catalogStats = {
+  total: catalogSorted.length,
+  active: catalogSorted.filter((v) => v.status === 'ACTIVE').length,
+  review: catalogSorted.filter((v) => v.flags_needs_review).length,
+  noValid: catalogSorted.filter((v) => v.status === 'NO_VALID_REPLACEMENT').length,
+  publishedBg: catalogSorted.filter((v) =>
+    v.vehicle_marketplace.some((m) => m.marketplace === 'mobile_bg' && m.publication_status === 'PUBLISHED'),
+  ).length,
+};
+
+export const catalogFilterOptions = {
+  makes: Array.from(new Set(catalogSorted.map((v) => v.make))).sort((a, b) => a.localeCompare(b, 'bg')),
+  fuels: Array.from(new Set(catalogSorted.map((v) => v.fuel))).sort((a, b) => fuelRank(a) - fuelRank(b)),
+  models: Array.from(new Set(catalogSorted.map((v) => v.model))).sort((a, b) => a.localeCompare(b, 'bg')),
+};
+
+export function getCatalogModelsForMake(make: string): string[] {
+  return Array.from(
+    new Set(catalogSorted.filter((v) => v.make === make).map((v) => v.model)),
+  ).sort((a, b) => a.localeCompare(b, 'bg'));
+}
+
+export function filterCatalog(opts: {
+  make: string;
+  model: string;
+  fuel: string;
+  yearFrom: string;
+  yearTo: string;
+}): VehicleWithMarketplace[] {
+  return catalogSorted.filter((v) => {
+    if (opts.make !== 'ALL' && v.make !== opts.make) return false;
+    if (opts.model !== 'ALL' && v.model !== opts.model) return false;
+    if (opts.fuel !== 'ALL' && v.fuel !== opts.fuel) return false;
+    if (opts.yearFrom !== 'ALL' && v.model_year < Number(opts.yearFrom)) return false;
+    if (opts.yearTo !== 'ALL' && v.model_year > Number(opts.yearTo)) return false;
+    return true;
+  });
 }

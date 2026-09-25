@@ -17,7 +17,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createClient } from '@supabase/supabase-js';
 
-const DEFAULT_FILE = 'data/master_catalog_v40.json';
+const DEFAULT_FILE = 'src/data/master_catalog_v40.json';
 const BATCH_SIZE = 500;
 
 interface CatalogRecord {
