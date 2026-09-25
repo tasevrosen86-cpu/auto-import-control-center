@@ -35,7 +35,12 @@ begin
     raise exception 'Royal Cars BG was not created — the migration did not run';
   end if;
 
-  insert into public.companies (slug, name) values ('test-other-company', 'Test Other Company')
+  -- Inactive on purpose. `private.fill_company_id` and `queue_source_intake` fall
+  -- back to "the one active company" when a system administrator holds no
+  -- company — the production phase, where only Royal Cars BG exists, and which
+  -- the assertions below cover. A second *active* company is the moment that
+  -- fallback is meant to stop working, and that case is asserted separately.
+  insert into public.companies (slug, name, status) values ('test-other-company', 'Test Other Company', 'INACTIVE')
   returning id into v_other;
 
   insert into auth.users (email) values
@@ -451,6 +456,22 @@ begin
   ) then
     raise exception 'the owner''s chosen company was ignored';
   end if;
+
+  -- The single-active-company fallback is meant to die the moment a second firm
+  -- is active: the owner then has to name the company, and nothing quietly
+  -- assumes Royal Cars. Without this the fallback would survive into
+  -- multi-company and place every unplaced import in the wrong firm.
+  update public.companies set status = 'ACTIVE' where id = v_other;
+  begin
+    perform public.queue_source_intake(
+      'https://fem.encar.com/cars/detail/131313131', 'encar', 'fem.encar.com', '131313131',
+      'LINK_FIELD', null, null, current_setting('test.admin')::uuid
+    );
+    raise exception 'the single-company fallback still placed an unplaced import with two active companies';
+  exception
+    when insufficient_privilege then null;
+  end;
+  update public.companies set status = 'INACTIVE' where id = v_other;
 
   -- The whole function is server-only; a browser client must not reach it.
   if has_function_privilege('authenticated',
