@@ -39,18 +39,18 @@ Every call is recorded with its step, endpoint, HTTP status, Mobile.bg's own
 
 ## Pictures are fetched, not uploaded
 
-`advertpicts` takes file **paths**, and Mobile.bg downloads them from the domain
+`advertpicts` takes file **URLs**, and Mobile.bg downloads them from the domain
 registered against the account. So:
 
-* a full external URL never works — only a path under the registered domain;
+* the full public URL is sent — `https://<registered domain>/<path>`;
 * the file must be `.jpg` or `.jpeg`, so `.webp` and `.png` sources are
   re-encoded (via `sharp`);
-* one request carries up to 17 paths separated by `~`.
+* one request carries up to 17 URLs separated by `~`.
 
 Selected pictures are downloaded into `MOBILE_BG_API_PICTURE_ROOT` (default
-`/var/www/html`) under `mobilebg-pictures/<draft id>/`, and the path sent is the
-part below `MOBILE_BG_API_PICTURE_BASE_URL`. Each file is checked to be publicly
-readable before its path is sent.
+`/var/www/html`) under `mobilebg-pictures/<draft id>/`, and the URL sent is
+`MOBILE_BG_API_PICTURE_BASE_URL` plus that path. Each file is checked to be
+publicly readable at that same URL before it is sent.
 
 ## Retrying after a failure
 

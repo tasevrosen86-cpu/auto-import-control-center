@@ -27,7 +27,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { MobileBgApiClient, MobileBgApiError, trimTrace, type TraceEntry } from './client.js';
 import { resolvePictureListingId } from './publish-id.js';
-import { preparePictures, verifyPubliclyReadable, type SourceImage } from './pictures.js';
+import { preparePictures, verifyPubliclyReadable, pictureUrl, type SourceImage } from './pictures.js';
 import { checkReadiness, summarizeReadiness } from './readiness.js';
 import { EXTRI_SEPARATOR } from './mapping.js';
 import { intersectWithCatfields, readCatfields } from './mapping.js';
@@ -285,12 +285,14 @@ async function runJob(job: Job): Promise<void> {
 
         // One call adds all of them: the API takes up to 17 names separated by
         // `~`, and splitting them into 17 calls would multiply the failure
-        // surface for no benefit.
-        const upload = await client.advertPicts(ida, 'add', { picts: sendable.map(picture => picture.path).join('~') });
+        // surface for no benefit. Each entry is the full public URL, because
+        // Mobile.bg downloads the file itself and a bare path would be resolved
+        // against its own host instead of ours.
+        const upload = await client.advertPicts(ida, 'add', { picts: sendable.map(picture => pictureUrl(pictureBaseUrl, picture)).join('~') });
         trace.push(...client.trace.splice(0, client.trace.length));
         if (upload.ok) {
           uploaded = sendable.length;
-          for (const picture of sendable) pictureResults.push({ path: picture.path, ok: true, bytes: picture.bytes });
+          for (const picture of sendable) pictureResults.push({ path: picture.path, url: pictureUrl(pictureBaseUrl, picture), ok: true, bytes: picture.bytes });
           notes.push(`Изпратени ${uploaded} снимки с единa заявка.`);
         } else {
           // Adding all at once is atomic on Mobile.bg's side, so a rejection
@@ -301,9 +303,9 @@ async function runJob(job: Job): Promise<void> {
             // Seventeen sequential calls can outlast the token, so it is
             // re-issued as the loop runs rather than only once before it.
             await ensureFreshToken();
-            const one = await client.advertPicts(ida, 'add', { picts: picture.path });
+            const one = await client.advertPicts(ida, 'add', { picts: pictureUrl(pictureBaseUrl, picture) });
             trace.push(...client.trace.splice(0, client.trace.length));
-            pictureResults.push({ path: picture.path, ok: one.ok, reason: one.ok ? null : one.error });
+            pictureResults.push({ path: picture.path, url: pictureUrl(pictureBaseUrl, picture), ok: one.ok, reason: one.ok ? null : one.error });
             if (one.ok) uploaded += 1;
           }
           notes.push(`Приети ${uploaded} от ${sendable.length} снимки.`);

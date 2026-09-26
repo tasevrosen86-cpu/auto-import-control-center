@@ -226,7 +226,16 @@ export async function preparePictures(
   return { pictures, skipped, directory, directory_path: directoryPath };
 }
 
-// Verifies a prepared file is publicly readable at the path that will be sent.
+// The URL that is sent to Mobile.bg for one picture: the registered base URL
+// plus the path below it. The full URL is what goes into `picts` — a bare path
+// is resolved against Mobile.bg's own host, not ours, which is why every picture
+// came back as "can't download" while the files themselves were served fine.
+export function pictureUrl(baseUrl: string, picture: PreparedPicture): string {
+  const base = baseUrl.replace(/\/+$/, '');
+  return `${base}${picture.path.startsWith('/') ? '' : '/'}${picture.path}`;
+}
+
+// Verifies a prepared file is publicly readable at the URL that will be sent.
 // A file written but not served — wrong root, blocked extension, missing
 // permission — would make Mobile.bg fail with a message that names no cause, so
 // the check happens here where the reason is still known.
@@ -235,7 +244,7 @@ export async function verifyPubliclyReadable(
   picture: PreparedPicture,
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ ok: boolean; status: number | null; error: string | null }> {
-  const url = `${baseUrl.replace(/\/+$/, '')}${picture.path.startsWith('/') ? '' : '/'}${picture.path}`;
+  const url = pictureUrl(baseUrl, picture);
   try {
     const response = await fetchImpl(url, { method: 'HEAD', signal: AbortSignal.timeout(15000) });
     if (response.ok) return { ok: true, status: response.status, error: null };

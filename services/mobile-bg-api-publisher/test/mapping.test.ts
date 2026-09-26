@@ -13,7 +13,7 @@ import {
 } from '../src/mapping.ts';
 import { checkReadiness, summarizeReadiness } from '../src/readiness.ts';
 import { resolvePictureListingId } from '../src/publish-id.ts';
-import { isJpeg, extensionOf, isAcceptableFilename, preparePictures } from '../src/pictures.ts';
+import { isJpeg, extensionOf, isAcceptableFilename, preparePictures, pictureUrl } from '../src/pictures.ts';
 
 type StubResponse = { status: number; body: unknown };
 
@@ -474,7 +474,7 @@ await check('JPEG се записва с правилно име и път', asy
   assert.equal(batch.pictures.length, 1);
   assert.equal(batch.pictures[0].filename, 'image-1.jpg');
   assert.ok(batch.pictures[0].path.endsWith('/image-1.jpg'));
-  assert.ok(!batch.pictures[0].path.startsWith('http'), 'подава се само пътят под домейна');
+  assert.ok(!batch.pictures[0].path.startsWith('http'), 'в записа се пази само пътят под домейна');
 });
 
 await check('основната снимка е първа', async () => {
@@ -598,9 +598,55 @@ await check('снимките се подават като пътища, раз�
   // which is what Mobile.bg's parser receives. `~` is percent-encoded to %7E and
   // `/` to %2F, both of which every standard form parser decodes back.
   const decoded = new URLSearchParams(body).get('picts') || '';
-  assert.equal(decoded, '/p/a.jpg~/p/b.jpg', 'пътищата се разделят с ~');
-  assert.ok(!decoded.includes('http'), 'не се подават пълни URL адреси');
-  assert.ok(!decoded.includes('autoimportcontrolcenter.biz'), 'домейнът е регистриран от Mobile.bg и не се повтаря');
+  assert.equal(decoded, '/p/a.jpg~/p/b.jpg', 'стойностите се разделят с ~');
+  assert.ok(!decoded.includes('http'), 'клиентът подава стойностите както са му дадени');
+});
+
+await check('picts носи пълния публичен URL под регистрирания домейн', async () => {
+  const picture = {
+    filename: 'image-1.jpg',
+    path: '/mobilebg-pictures/d1/image-1.jpg',
+    source_url: 'https://example.com/a.jpg',
+    bytes: 10,
+    converted_from: null,
+    is_main: true,
+  };
+  assert.equal(
+    pictureUrl('https://autoimportcontrolcenter.biz', picture),
+    'https://autoimportcontrolcenter.biz/mobilebg-pictures/d1/image-1.jpg',
+    'URL-ът се строи от BASE_URL и пътя',
+  );
+  // A trailing slash on the base must not double up, and a path without a
+  // leading slash must still join cleanly.
+  assert.equal(
+    pictureUrl('https://autoimportcontrolcenter.biz/', { ...picture, path: 'mobilebg-pictures/d1/image-1.jpg' }),
+    'https://autoimportcontrolcenter.biz/mobilebg-pictures/d1/image-1.jpg',
+    'BASE_URL със завършваща наклонена черта не дава двойна',
+  );
+  // The domain is never hardcoded: another registered base moves with it.
+  assert.equal(
+    pictureUrl('https://staging.example.org', picture),
+    'https://staging.example.org/mobilebg-pictures/d1/image-1.jpg',
+    'домейнът идва само от конфигурацията',
+  );
+});
+
+await check('груповата заявка подава пълни URL-и, разделени с ~', async () => {
+  const base = 'https://autoimportcontrolcenter.biz';
+  const joined = ['1', '2'].map(n => pictureUrl(base, {
+    filename: `image-${n}.jpg`,
+    path: `/mobilebg-pictures/d1/image-${n}.jpg`,
+    source_url: '',
+    bytes: 1,
+    converted_from: null,
+    is_main: n === '1',
+  })).join('~');
+  assert.equal(
+    joined,
+    'https://autoimportcontrolcenter.biz/mobilebg-pictures/d1/image-1.jpg~https://autoimportcontrolcenter.biz/mobilebg-pictures/d1/image-2.jpg',
+    'всяка снимка е пълен URL',
+  );
+  assert.equal(joined.split('~').length, 2, 'разделител е ~');
 });
 
 // ------------------------------------------------------- listing id for pictures
