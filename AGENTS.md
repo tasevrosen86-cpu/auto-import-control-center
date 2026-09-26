@@ -479,40 +479,48 @@ draft. That part works — both edge functions are deployed and reachable, and t
 draft does get created.
 
 Nothing then ever processes the queue. `services/source-intake-worker` requires
-`SUPABASE_SERVICE_ROLE_KEY` and exits immediately without it. `deploy-vps.yml`
-builds the seam but never completes it: it unpacks the worker tarball into
-`/home/ubuntu/auto-import-control-center/services/source-intake-worker`, yet
-installs a systemd unit only for the publisher. There is no unit file anywhere in
-the repository for the intake worker — line 118 of the deploy only *reads* an
-`EnvironmentFiles` property from a `source-intake-worker.service` that has never
-been installed. No cron entry starts it either.
+`SUPABASE_SERVICE_ROLE_KEY` and exits immediately without it.
 
 Consequence: **URL import can never produce a populated draft, however complete
 the catalog flow becomes.** The draft stays empty and `source_listing_jobs` keeps
 the job `QUEUED` for ever. This is the second half of the original complaint, and
 it is a deployment gap rather than a code bug.
 
-Fix, when picking it up: add `SUPABASE_SERVICE_ROLE_KEY` as a repository secret,
-write it into `/etc/aicc-source-intake.env` in the deploy, and install the
-worker's `.service` and `.timer` the same way the publisher is installed. The
-worker always needs the service role key — it has no anon fallback, unlike the
-publisher. Its `ingest-source-listing` call also passes
+This has been fixed in `deploy-vps.yml`. The deploy now:
+
+1. writes `SUPABASE_SERVICE_ROLE_KEY` into `/etc/aicc-source-intake.env`;
+2. runs `npm ci` and `npx playwright install --with-deps chromium` in the
+   worker's directory, so its dependencies exist on the server;
+3. installs `aicc-source-intake.service` and `aicc-source-intake.timer` itself.
+
+The worker always needs the service role key — it has no anon fallback, unlike
+the publisher. Its `ingest-source-listing` call also passes
 `SUPABASE_SERVICE_ROLE_KEY` as the bearer token directly, so the key is not
 optional on any path.
 
-### Look for the owner's `SUPABASE_SERVICE_ROLE_KEY` GitHub secret first
+Two details worth keeping:
 
-The deploy already tries to find the service role key in this order:
+* The worker's install is the only part of the deploy that had never run on the
+  server, so it is deliberately non-fatal. A failure there raises a
+  `::warning::` and skips the unit rather than stopping the site and the
+  publishers from being updated.
+* `services/source-intake-worker/package-lock.json` is required by `npm ci`. It
+  did not exist and was generated; deleting it breaks the deploy step.
 
-1. the `Environment` property of any unit whose name matches
-   `(source|intake|worker|import|publish)`;
-2. the `EnvironmentFiles` of those same units;
-3. `${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}` — only if one was set up already.
+### The service role key comes from the repository secret
 
-The key is expected to be the owner's `SUPABASE_SERVICE_ROLE_KEY` repository
-secret, under exactly that name. Before building anything new, check whether it
-exists: if it does, the deploy starts picking it up on its own and the warning
-stops.
+`SUPABASE_SERVICE_ROLE_KEY` is read directly from
+`${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}` and written into the environment file
+of each worker that needs it. It is expected to be the owner's repository secret
+under exactly that name.
+
+The deploy used to *guess* the key instead: it walked every unit whose name
+matched `(source|intake|worker|import|publish)`, read that unit's `Environment`
+and `EnvironmentFiles`, and only fell back to the repository secret. That search
+is gone. It was both fragile and wrong: it is what picked up
+`snapd.autoimport.service`, a unit that belongs to snapd, as the "URL intake
+worker", and it made the publishers' credentials depend on which unrelated units
+happened to be installed on the host. The secret is now the single source.
 
 ## The public key is published on purpose
 

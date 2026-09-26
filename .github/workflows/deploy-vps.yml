@@ -47,17 +47,41 @@ jobs:
         env:
           MOBILE_BG_USERNAME: ${{ secrets.MOBILE_BG_USERNAME }}
           MOBILE_BG_PASSWORD: ${{ secrets.MOBILE_BG_PASSWORD }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           umask 077
           {
             printf 'SUPABASE_URL=%s\n' 'https://cgftjqwebvddtsbcbeml.supabase.co'
             printf 'SUPABASE_ANON_KEY=%s\n' 'sb_publishable_3szh1-AiAAUYDeVBwO7bJQ_gXhkBU0A'
+            # The worker reads the queue tables, which `anon` may not read once
+            # the tenant work revokes its access. The anon key stays because the
+            # worker falls back to it and removing it here would be a second
+            # change at the same time.
+            printf 'SUPABASE_SERVICE_ROLE_KEY=%s\n' "$SUPABASE_SERVICE_ROLE_KEY"
             printf 'MOBILE_BG_USERNAME=%s\n' "$MOBILE_BG_USERNAME"
             printf 'MOBILE_BG_PASSWORD=%s\n' "$MOBILE_BG_PASSWORD"
             printf 'MOBILE_BG_USER_DATA_DIR=%s\n' '/home/ubuntu/.local/share/aicc-mobile-bg'
             printf 'MOBILE_BG_HEADLESS=true\n'
             printf 'WORKER_NAME=%s\n' 'aicc-mobile-publisher'
           } > mobile-publisher.env
+
+      # The URL intake worker is the only path that opens an Encar or AutoTrader
+      # Canada listing and fills the draft from it. It has no anon fallback: it
+      # refuses to start without the service role key, and it also passes that
+      # key as the bearer token to the ingest edge function, so a missing key
+      # stops the import at the first step. Its own file keeps it apart from the
+      # publishers, which is what the timer and the unit both point at.
+      - name: Prepare source intake environment
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          umask 077
+          {
+            printf 'SUPABASE_URL=%s\n' 'https://cgftjqwebvddtsbcbeml.supabase.co'
+            printf 'SUPABASE_SERVICE_ROLE_KEY=%s\n' "$SUPABASE_SERVICE_ROLE_KEY"
+            printf 'SOURCE_INTAKE_HEADLESS=true\n'
+            printf 'WORKER_NAME=%s\n' 'aicc-source-intake'
+          } > source-intake.env
 
       # The «Обяви» API publisher gets its own environment file. It talks to the
       # official Mobile.bg import API, which is a different credential path from
@@ -67,11 +91,16 @@ jobs:
         env:
           MOBILE_BG_USERNAME: ${{ secrets.MOBILE_BG_USERNAME }}
           MOBILE_BG_PASSWORD: ${{ secrets.MOBILE_BG_PASSWORD }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           umask 077
           {
             printf 'SUPABASE_URL=%s\n' 'https://cgftjqwebvddtsbcbeml.supabase.co'
             printf 'SUPABASE_ANON_KEY=%s\n' 'sb_publishable_3szh1-AiAAUYDeVBwO7bJQ_gXhkBU0A'
+            # The publisher claims queued OFFICIAL_API jobs and writes results
+            # back; the cleanup unit shares this file and deletes files for
+            # purged drafts. Both read tables that `anon` loses access to.
+            printf 'SUPABASE_SERVICE_ROLE_KEY=%s\n' "$SUPABASE_SERVICE_ROLE_KEY"
             printf 'MOBILE_BG_API_USERNAME=%s\n' "$MOBILE_BG_USERNAME"
             printf 'MOBILE_BG_API_PASSWORD=%s\n' "$MOBILE_BG_PASSWORD"
             printf 'MOBILE_BG_API_BASE_URL=%s\n' 'https://api.mobile.bg'
@@ -136,12 +165,13 @@ jobs:
           VPS_PORT: ${{ secrets.VPS_PORT || 22 }}
         run: |
           tar -C dist -czf dist.tar.gz .
-          tar -C services/source-intake-worker -czf worker.tar.gz src package.json
+          tar -C services/source-intake-worker -czf worker.tar.gz src package.json package-lock.json
           tar -C services/mobile-publisher -czf mobile-publisher.tar.gz src package.json package-lock.json
           tar -C services/mobile-bg-api-publisher -czf mobile-bg-api-publisher.tar.gz src package.json package-lock.json
           tar -C services/publications-publisher -czf publications-publisher.tar.gz src package.json package-lock.json
           tar -C services/mobile-bg-cleanup -czf mobile-bg-cleanup.tar.gz src package.json package-lock.json
           scp -P "$VPS_PORT" dist.tar.gz worker.tar.gz mobile-publisher.tar.gz mobile-publisher.env \
+            source-intake.env \
             mobile-bg-api-publisher.tar.gz mobile-bg-api.env \
             mobile-bg-cleanup.tar.gz \
             publications-publisher.tar.gz publications.env "$VPS_USER@$VPS_HOST:/tmp/"
@@ -168,34 +198,36 @@ jobs:
           mkdir -p "$APP_DIR/services/source-intake-worker"
           tar -xzf /tmp/worker.tar.gz -C "$APP_DIR/services/source-intake-worker"
 
-          # Find the already-installed URL worker by its code directory, rather
-          # than assuming a unit name. This avoids starting either publisher.
-          SOURCE_INTAKE_UNIT=""
-          for UNIT_NAME in $(systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '$1 ~ /(source|intake|worker|import)/ {print $1}'); do
-            UNIT_INFO="$(sudo systemctl show "$UNIT_NAME" --property=ExecStart --property=WorkingDirectory --value 2>/dev/null || true)"
-            if printf '%s' "$UNIT_INFO" | grep -q "$APP_DIR/services/source-intake-worker"; then
-              SOURCE_INTAKE_UNIT="$UNIT_NAME"
-              break
-            fi
-          done
-          # Existing production deployments name the intake worker
-          # snapd.autoimport.service. Keep it as a narrowly scoped fallback:
-          # do not ever select either Mobile.bg publisher service here.
-          if [ -z "$SOURCE_INTAKE_UNIT" ] && sudo systemctl cat snapd.autoimport.service >/dev/null 2>&1; then
-            SOURCE_INTAKE_UNIT="snapd.autoimport.service"
-            echo "Using existing URL intake worker unit: $SOURCE_INTAKE_UNIT"
+          # The URL intake worker used to be started only if a unit for it was
+          # already on the server, and no unit for it was ever installed. The
+          # search then fell through to `snapd.autoimport.service`, a unit that
+          # belongs to snapd and not to this application, and the deploy reported
+          # success while source_listing_jobs stayed undrained. The worker is now
+          # installed here, so it exists because this deploy creates it rather
+          # than because a search happens to find something.
+          #
+          # Its install is deliberately not fatal. It is the one part of this
+          # deploy that has never run on the server before, and a failure in it
+          # must not stop the site, the publishers or the publications worker
+          # from being updated. A failed install leaves the unit without its
+          # dependencies, which surfaces as a failing service and a warning.
+          INTAKE_DIR="$APP_DIR/services/source-intake-worker"
+          INTAKE_READY=1
+          cd "$INTAKE_DIR"
+          if ! npm ci; then
+            echo "::warning::URL intake worker: npm ci failed."
+            INTAKE_READY=0
+          elif ! npx playwright install --with-deps chromium; then
+            echo "::warning::URL intake worker: Playwright browser install failed."
+            INTAKE_READY=0
           fi
-          if [ -z "$SOURCE_INTAKE_UNIT" ]; then
-            echo "::error::URL intake worker unit was not found on the server."
-            echo "Candidate units:"
-            systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '$1 ~ /(source|intake|worker|import)/ {print $1}' || true
-            exit 1
+          if [ "$INTAKE_READY" = 1 ]; then
+            sudo install -m 600 /tmp/source-intake.env /etc/aicc-source-intake.env
+            echo "URL intake worker installed."
+          else
+            echo "::warning::URL intake worker is not usable; its unit is not installed."
           fi
-          if ! sudo systemctl start "$SOURCE_INTAKE_UNIT"; then
-            sudo journalctl -u "$SOURCE_INTAKE_UNIT" -n 100 --no-pager
-            exit 1
-          fi
-          echo "Started URL intake worker: $SOURCE_INTAKE_UNIT"
+          rm -f /tmp/source-intake.env
 
           mkdir -p "$PUBLISHER_DIR"
           tar -xzf /tmp/mobile-publisher.tar.gz -C "$PUBLISHER_DIR"
@@ -264,11 +296,57 @@ jobs:
           echo "Publications worker environment installed with configured server-only Supabase secret."
 
           NPM_BIN="$(command -v npm)"
-          SOURCE_ENV_FILE="$(systemctl show "$SOURCE_INTAKE_UNIT" --property=EnvironmentFiles --value 2>/dev/null | tr ' ' '\n' | sed 's/^-//' | awk 'NF {print; exit}')"
-          SOURCE_ENV_LINE=""
-          if [ -n "$SOURCE_ENV_FILE" ] && [ -f "$SOURCE_ENV_FILE" ]; then
-            SOURCE_ENV_LINE="EnvironmentFile=$SOURCE_ENV_FILE"
+
+          # The URL intake worker's own unit and timer. It is a oneshot drain on
+          # the same 60-second cadence as the publishers: claim one QUEUED row
+          # from source_listing_jobs, open the listing, write the draft back.
+          # A failure is a warning rather than a deploy failure for the same
+          # reason the API publisher's is: the site and the other workers do not
+          # depend on it, and a failed job stays FAILED and visible in the panel.
+          #
+          # The unit is only written when the install above succeeded. Writing it
+          # against a missing environment file would leave a timer that fails
+          # every minute, which is noise rather than a signal.
+          if [ "$INTAKE_READY" = 1 ]; then
+          sudo tee /etc/systemd/system/aicc-source-intake.service >/dev/null <<UNIT
+          [Unit]
+          Description=Auto Import Control Center URL intake worker
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=oneshot
+          User=ubuntu
+          WorkingDirectory=$INTAKE_DIR
+          EnvironmentFile=/etc/aicc-source-intake.env
+          ExecStart=$NPM_BIN run run-once
+          # A listing page can be slow, and the worker retries inside the run.
+          TimeoutStartSec=600
+          Nice=10
+          UNIT
+
+          sudo tee /etc/systemd/system/aicc-source-intake.timer >/dev/null <<UNIT
+          [Unit]
+          Description=Run the URL intake worker for queued source_listing_jobs
+
+          [Timer]
+          OnBootSec=60s
+          OnUnitActiveSec=60s
+          Persistent=true
+          Unit=aicc-source-intake.service
+
+          [Install]
+          WantedBy=timers.target
+          UNIT
+
+          sudo systemctl daemon-reload
+          sudo systemctl enable --now aicc-source-intake.timer
+          if ! sudo systemctl start aicc-source-intake.service; then
+            echo "::warning::URL intake worker did not start; see journal below."
+            sudo journalctl -u aicc-source-intake.service -n 80 --no-pager || true
           fi
+          fi
+
           sudo tee /etc/systemd/system/aicc-mobile-publisher.service >/dev/null <<UNIT
           [Unit]
           Description=Auto Import Control Center Mobile.bg preview publisher
@@ -279,7 +357,6 @@ jobs:
           Type=oneshot
           User=ubuntu
           WorkingDirectory=$PUBLISHER_DIR
-          $SOURCE_ENV_LINE
           EnvironmentFile=/etc/aicc-mobile-publisher.env
           ExecStart=$NPM_BIN run run-once
           UNIT
@@ -315,7 +392,6 @@ jobs:
           Type=oneshot
           User=ubuntu
           WorkingDirectory=$API_PUBLISHER_DIR
-          $SOURCE_ENV_LINE
           EnvironmentFile=/etc/aicc-mobile-bg-api.env
           ExecStart=$NPM_BIN run run-once
           UNIT
@@ -359,7 +435,6 @@ jobs:
           Type=oneshot
           User=ubuntu
           WorkingDirectory=$CLEANUP_DIR
-          $SOURCE_ENV_LINE
           EnvironmentFile=/etc/aicc-mobile-bg-api.env
           Environment=WORKER_NAME=aicc-mobile-bg-cleanup
           ExecStart=$NPM_BIN run run-once
