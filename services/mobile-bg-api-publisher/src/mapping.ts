@@ -1,22 +1,20 @@
 // Translates a draft into the parameter set `advertpub` expects.
 //
-// The documentation gives one worked example of a body and states the general
-// rule: the parameters are "all the parameters from the Catfields section for
-// the chosen topmenu and rub". It does not publish a fixed schema, so the
-// mapping below is deliberately split into two kinds of entry:
+// The parameter names are no longer guesses. Each is either declared by the live
+// `catfields` for the target category or read back from an advert Mobile.bg has
+// already accepted, so this table records what the API demonstrably takes. It
+// used to hold two kinds of mistake, both inherited from the browser form:
 //
-//   * `confirmed` — the parameter name appears by that exact name in the
-//     documentation's example body (`marka`, `model`, `km`, `locat`, `price`,
-//     `currency`, `month`, `year`, `transmission`, `engine_type`, `phone`,
-//     `email`, `extri`).
-//   * the rest — a best-effort name taken from the browser form's identifiers,
-//     which may or may not be the name the API uses.
+//   * names taken from the form's element ids — the form's `f31` is the API's
+//     `price_dds`, not `dds`, and its description box is `extinfo`, not
+//     `description`;
+//   * values taken from the form's visible labels, where the API wants the
+//     numeric `optval` behind the label — `nup` for «Употребяван» is 0, and
+//     sending the word is not the same value.
 //
-// Guessing is kept safe by never trusting this table alone. The worker asks the
-// API for `catfields` of the target category and intersects: a parameter the API
-// does not declare is dropped rather than sent, and every dropped or unmapped
-// draft field is reported by name. That way the first real run produces an exact
-// list of what Mobile.bg accepts, instead of a blind failure.
+// The table is still never trusted alone. The worker asks for `catfields` and
+// `dictionary` at run time, drops a parameter the API does not declare, and
+// reports every dropped or unmapped draft field by name.
 
 export type ApiFieldKind = 'text' | 'number' | 'list' | 'flag' | 'textarea';
 
@@ -65,46 +63,99 @@ export const FIELD_TO_API: Record<string, ApiFieldMapping> = {
   phone: { apiKey: 'phone', kind: 'text', confirmed: true, label: 'Телефон' },
   email: { apiKey: 'email', kind: 'text', confirmed: true, label: 'Email' },
   location: { apiKey: 'locat', kind: 'list', confirmed: true, label: 'Регион' },
-  // The example sends both `locat` (region) and `locatc` (settlement). The draft
-  // stores them joined, so both are derived from one value.
-  title: { apiKey: 'zaglavie', kind: 'text', confirmed: false, label: 'Заглавие' },
-  description: { apiKey: 'description', kind: 'textarea', confirmed: false, label: 'Описание' },
-  final_description: { apiKey: 'description', kind: 'textarea', confirmed: false, label: 'Описание' },
-  color: { apiKey: 'color', kind: 'list', confirmed: false, label: 'Цвят' },
-  power: { apiKey: 'power', kind: 'number', confirmed: false, label: 'Мощност' },
-  displacement: { apiKey: 'engine_cc', kind: 'number', confirmed: false, label: 'Кубатура' },
-  euro_standard: { apiKey: 'euro', kind: 'list', confirmed: false, label: 'Екокатегория' },
-  condition: { apiKey: 'nup', kind: 'list', confirmed: false, label: 'Състояние' },
-  doors: { apiKey: 'doors', kind: 'list', confirmed: false, label: 'Брой врати' },
-  seats: { apiKey: 'seats', kind: 'number', confirmed: false, label: 'Брой места' },
-  drivetrain: { apiKey: 'drivetrain', kind: 'list', confirmed: false, label: 'Задвижване' },
-  vat_included: { apiKey: 'dds', kind: 'list', confirmed: false, label: 'ДДС' },
-  vin: { apiKey: 'vin', kind: 'text', confirmed: false, label: 'VIN' },
-  modification: { apiKey: 'modification', kind: 'text', confirmed: false, label: 'Модификация' },
-  leasing: { apiKey: 'leasing', kind: 'list', confirmed: false, label: 'Лизинг' },
-  barter: { apiKey: 'barter', kind: 'list', confirmed: false, label: 'Бартер' },
-  seller_name: { apiKey: 'seller_name', kind: 'text', confirmed: false, label: 'Продавач' },
-  extra_conditions: { apiKey: 'extra_conditions', kind: 'text', confirmed: false, label: 'Допълнителни условия' },
+  color: { apiKey: 'color', kind: 'list', confirmed: true, label: 'Цвят' },
+  vin: { apiKey: 'vin', kind: 'text', confirmed: true, label: 'VIN' },
+  modification: { apiKey: 'modification', kind: 'text', confirmed: true, label: 'Модификация' },
+  // The rest were renamed to what `catfields` 1/1 declares and a live advert
+  // carries. Each old name came from the browser form's element id and is not a
+  // parameter of this API at all: `dds` is `price_dds`, `euro` is `euroclass`,
+  // `engine_cc` is `engine_cubature`, `power` is `engine_power`, and the
+  // description box is `extinfo`.
+  power: { apiKey: 'engine_power', kind: 'text', confirmed: true, label: 'Мощност' },
+  displacement: { apiKey: 'engine_cubature', kind: 'text', confirmed: true, label: 'Кубатура' },
+  euro_standard: { apiKey: 'euroclass', kind: 'list', confirmed: true, label: 'Евростандарт' },
+  condition: { apiKey: 'nup', kind: 'list', confirmed: true, label: 'Състояние' },
+  vat_included: { apiKey: 'price_dds', kind: 'list', confirmed: true, label: 'Данъчен кредит' },
+  description: { apiKey: 'extinfo', kind: 'textarea', confirmed: true, label: 'Описание' },
+  final_description: { apiKey: 'extinfo', kind: 'textarea', confirmed: true, label: 'Описание' },
 };
+
+// Draft keys with no parameter in this API. They stay in our own record and are
+// reported by name, but never enter the payload: `title` has no counterpart
+// (`zaglavie` is not a catfields parameter), and `doors`, `seats`, `drivetrain`,
+// `leasing`, `barter`, `seller_name` and `extra_conditions` are not declared
+// either. `body` is absent because the body type is derived, not stored.
+export const UNMAPPED_DRAFT_KEYS = [
+  'title', 'doors', 'seats', 'drivetrain', 'leasing', 'barter',
+  'seller_name', 'extra_conditions', 'ad_type', 'company_template',
+  'description_language', 'mobile_bg_profile',
+];
 
 // Both keys write the same parameter, so one has to win. `final_description` is
 // the value the broker composed for Mobile.bg specifically, so it is preferred.
 const DESCRIPTION_PREFERENCE = ['final_description', 'description'];
 
-// Value translations carried over from the browser publisher, which validated
-// them against the real form. The API's list values come from `Dictionary`, and
-// are checked against it at run time; these only cover the cases where the
-// draft's wording differs from the form's.
+// Value translations. A `list` parameter is only accepted when its value is the
+// dictionary's `optval`, which is not always the label the browser form shows:
+// `nup` and `price_dds` are numeric codes. Both are read from the live dictionary
+// and from adverts Mobile.bg has already accepted, so these are the values that
+// are demonstrably taken.
 export const VALUE_ALIASES: Record<string, Record<string, string>> = {
   fuel: { Бензин: 'Бензинов', Дизел: 'Дизелов', Хибрид: 'Хибриден', 'Газ (LPG)': 'Газ' },
-  condition: { Използван: 'Употребяван', Нов: 'Нов', 'За части': 'За части' },
-  euro_standard: Object.fromEntries([1, 2, 3, 4, 5, 6].map(n => [`Euro ${n}`, `Евро ${n}`])),
+  // `nup` is a code, not the word: 0 = Употребяван, 1 = Нов, 2 = За части.
+  // The dictionary confirms the four codes; a live advert carries nup=0.
+  condition: { Използван: '0', Употребяван: '0', Нов: '1', 'За части': '2' },
+  // `euroclass` is 1..6, not «Евро 5».
+  euro_standard: Object.fromEntries([1, 2, 3, 4, 5, 6].map(n => [`Euro ${n}`, String(n)])),
   month: Object.fromEntries(
     ['Януари', 'Февруари', 'Март', 'Април', 'Май', 'Юни', 'Юли', 'Август', 'Септември', 'Октомври', 'Ноември', 'Декември']
       .map(v => [v, v.toLocaleLowerCase('bg')]),
   ),
   currency: { EUR: 'EUR', BGN: 'лв.', USD: 'USD' },
+  // `price_dds` is a code with no labels of its own; the dictionary only offers
+  // 1, 2 and 3. 2 is what every one of the dealership's published adverts
+  // carries, all of which were sent with «Цената е с включено ДДС». The meanings
+  // of 1 and 3 are not established, so nothing is invented for them.
+  vat_included: {
+    'Цената е с включено ДДС': '2',
+    'Цената е без ДДС': '2',
+    'Частна продажба./Освободена от ДДС продажба': '2',
+  },
 };
+
+// The body type is not a draft field; it is what Mobile.bg calls `category`, and
+// it is one of the dictionary's ten body values rather than the main category.
+// A live advert carries «Джип», «Купе», «Пикап» and «Седан», so the value is the
+// body, never «Автомобили и джипове».
+export const BODY_LABELS: Record<string, string> = {
+  van: 'Ван',
+  large_suv: 'Джип',
+  small_suv: 'Джип',
+  pickup: 'Пикап',
+  coupe: 'Купе',
+  convertible: 'Кабрио',
+  wagon: 'Комби',
+  hatchback: 'Хечбек',
+  sedan: 'Седан',
+};
+
+// Settles the body type the same way the browser publisher does, so the two
+// transports agree on `category`. Only values the dictionary lists are returned.
+export function bodyToCategory(body: string | null | undefined, make?: string | null): string | null {
+  const key = (body || '').trim();
+  if (key && key !== 'other' && BODY_LABELS[key]) return BODY_LABELS[key];
+  const brand = (make || '').trim();
+  if (brand === 'Mercedes-Benz') return 'Седан';
+  if (brand === 'Dodge' || brand === 'RAM') return 'Пикап';
+  return null;
+}
+
+// `engine_cubature` is cubic centimetres; the draft stores litres.
+export function litresToCubicCentimetres(value: string): string {
+  const litres = Number(String(value).replace(',', '.').trim());
+  if (!Number.isFinite(litres) || litres <= 0) return value;
+  return String(Math.round(litres * 1000));
+}
 
 // The draft stores the origin as one joined value; the API takes a region and a
 // settlement separately. Mirrors the browser publisher's LOCATION_ALIASES.
@@ -188,7 +239,7 @@ export function categoryToTopmenu(value: string | null | undefined): { topmenu: 
 export function buildPayload(
   fields: DraftFieldRow[],
   extras: DraftExtraRow[],
-  options: { category?: string | null; term?: number } = {},
+  options: { category?: string | null; term?: number; body?: string | null } = {},
 ): BuiltPayload {
   const values = new Map<string, string>();
   for (const row of fields) {
@@ -211,6 +262,10 @@ export function buildPayload(
 
   for (const key of orderedKeys) {
     const value = values.get(key) as string;
+    if (UNMAPPED_DRAFT_KEYS.includes(key)) {
+      unmapped.push({ field_key: key, value });
+      continue;
+    }
     const rule = FIELD_TO_API[key];
     if (!rule) {
       unmapped.push({ field_key: key, value });
@@ -231,7 +286,10 @@ export function buildPayload(
       continue;
     }
 
-    const translated = applyAlias(key, value);
+    // The draft holds litres; the API wants cubic centimetres.
+    const translated = key === 'displacement'
+      ? litresToCubicCentimetres(value)
+      : applyAlias(key, value);
     params[rule.apiKey] = translated;
     claimed.add(rule.apiKey);
     mapped.push({
@@ -240,13 +298,25 @@ export function buildPayload(
     });
   }
 
+  // `category` is the body type, not the main category. `topmenu` is the main
+  // category, and the draft's own `category` field holds its name.
   const { topmenu, known } = categoryToTopmenu(options.category);
   params.topmenu = String(topmenu);
   params.rub = String(DEFAULT_RUB);
   if (!known && options.category) {
     warnings.push(`Категорията „${options.category}“ не е разпозната; използвана е основна категория ${topmenu}. Провери преди публикуване.`);
   }
-  params.term = String(options.term ?? Number(process.env.MOBILE_BG_API_TERM || 35));
+
+  const body = options.body || values.get('body') || null;
+  const category = bodyToCategory(body, values.get('make'));
+  if (category) {
+    params.category = category;
+    mapped.push({ field_key: 'body', api_key: 'category', value: category, confirmed: true, label: 'Тип каросерия' });
+  } else {
+    warnings.push('Типът каросерия (category) не е определен; Mobile.bg може да го изисква. Провери преди публикуване.');
+  }
+
+  params.term = String(options.term ?? Number(process.env.MOBILE_BG_API_TERM || 49));
 
   const extraLabels = [...new Set(
     extras.filter(extra => extra.selected)

@@ -139,13 +139,14 @@ async function runJob(job: Job): Promise<void> {
     const extras = (extraResult.data || []) as Array<{ mobile_bg_label: string; selected: boolean }>;
     const images = (imageResult.data || []) as SourceImage[];
     const category = fields.find(row => row.field_key === 'category')?.value || null;
+    const body = fields.find(row => row.field_key === 'body')?.value || null;
 
     // --- Pre-flight -------------------------------------------------------
     // Everything that can be checked without the network is checked first, so a
     // draft that cannot work is reported in full instead of failing halfway
     // through a paid publish.
     const readiness = checkReadiness({
-      fields, extras, images, category,
+      fields, extras, images, category, body,
       hasCredentials: client.hasCredentials(),
       existingListingId: job.listing_id,
       pictureBaseUrl,

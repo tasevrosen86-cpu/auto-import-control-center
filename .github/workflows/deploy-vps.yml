@@ -83,7 +83,7 @@ jobs:
             printf 'MOBILE_BG_API_PICTURE_ROOT=%s\n' '/var/www/html'
             printf 'MOBILE_BG_API_PICTURE_BASE_URL=%s\n' 'https://autoimportcontrolcenter.biz'
             printf 'MOBILE_BG_API_PICTURE_PREFIX=%s\n' ''
-            printf 'MOBILE_BG_API_TERM=%s\n' '35'
+            printf 'MOBILE_BG_API_TERM=%s\n' '49'
             printf 'WORKER_NAME=%s\n' 'aicc-mobile-bg-api-publisher'
           } > mobile-bg-api.env
 

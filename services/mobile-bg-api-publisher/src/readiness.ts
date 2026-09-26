@@ -44,6 +44,8 @@ export type ReadinessInput = {
   extras: DraftExtraRow[];
   images: SourceImage[];
   category?: string | null;
+  // The body type, when the draft carries one. `category` is derived from it.
+  body?: string | null;
   catfields?: unknown;
   hasCredentials: boolean;
   // Present once a previous attempt created the listing. With an id the run can
@@ -71,7 +73,7 @@ export function checkReadiness(input: ReadinessInput): Readiness {
     if (value) values.set(row.field_key, value);
   }
 
-  const payload = buildPayload(input.fields, input.extras, { category: input.category });
+  const payload = buildPayload(input.fields, input.extras, { category: input.category, body: input.body });
   const selectedImages = input.images.filter(image => image.is_selected);
   const pictureOnlyBlockers: ReadinessIssue[] = [];
 

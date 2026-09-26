@@ -9,7 +9,7 @@ import { readFile } from 'node:fs/promises';
 import { MobileBgApiClient, findListingId, redactPath, excerptOf, trimTrace } from '../src/client.ts';
 import {
   buildPayload, readCatfields, intersectWithCatfields, splitLocation,
-  categoryToTopmenu, FIELD_TO_API,
+  categoryToTopmenu, FIELD_TO_API, bodyToCategory, litresToCubicCentimetres,
 } from '../src/mapping.ts';
 import { checkReadiness, summarizeReadiness } from '../src/readiness.ts';
 import { isJpeg, extensionOf, isAcceptableFilename, preparePictures } from '../src/pictures.ts';
@@ -169,6 +169,83 @@ await check('превежда полетата към параметрите н�
   assert.ok(built.params.term, 'term се подава');
 });
 
+// The names below are the ones `catfields` 1/1 declares and a live advert
+// carries. Each old name was the browser form's element id, which is not a
+// parameter of this API, so sending it produced "Wrong fields".
+await check('имената на параметрите са тези от catfields, не от формата', () => {
+  const built = buildPayload(
+    [
+      { field_key: 'condition', value: 'Използван' },
+      { field_key: 'vat_included', value: 'Цената е с включено ДДС' },
+      { field_key: 'displacement', value: '2.0' },
+      { field_key: 'euro_standard', value: 'Euro 5' },
+      { field_key: 'power', value: '250' },
+      { field_key: 'final_description', value: 'описание' },
+    ],
+    [],
+  );
+  assert.equal(built.params.nup, '0', 'condition отива в nup като код');
+  assert.equal(built.params.price_dds, '2', 'vat_included отива в price_dds');
+  assert.equal(built.params.engine_cubature, '2000', 'литрите стават куб.см');
+  assert.equal(built.params.euroclass, '5', 'euro_standard отива в euroclass като номер');
+  assert.equal(built.params.engine_power, '250', 'power отива в engine_power');
+  assert.equal(built.params.extinfo, 'описание', 'описанието отива в extinfo');
+  for (const absent of ['dds', 'euro', 'engine_cc', 'power', 'description', 'zaglavie']) {
+    assert.equal(built.params[absent], undefined, `${absent} не е параметър на API-то`);
+  }
+});
+
+await check('литрите се превръщат в куб.см', () => {
+  assert.equal(litresToCubicCentimetres('2.0'), '2000');
+  assert.equal(litresToCubicCentimetres('3.0'), '3000');
+  assert.equal(litresToCubicCentimetres('1,6'), '1600');
+  assert.equal(litresToCubicCentimetres('4400'), '4400000', 'вече в куб.см не се пипа');
+});
+
+await check('каросерията отива в category, не основната категория', () => {
+  assert.equal(bodyToCategory('large_suv'), 'Джип');
+  assert.equal(bodyToCategory('sedan'), 'Седан');
+  assert.equal(bodyToCategory('pickup'), 'Пикап');
+  assert.equal(bodyToCategory('other', 'Dodge'), 'Пикап', 'при other решава марката');
+  assert.equal(bodyToCategory('other', 'Mercedes-Benz'), 'Седан');
+  assert.equal(bodyToCategory('other', 'Audi'), null, 'не се гадае');
+
+  const built = buildPayload([{ field_key: 'make', value: 'Audi' }], [], { body: 'large_suv' });
+  assert.equal(built.params.category, 'Джип');
+  assert.equal(built.params.topmenu, '1', 'основната категория остава topmenu');
+  assert.notEqual(built.params.category, 'Автомобили и джипове');
+});
+
+await check('непознат тип каросерия се отчита, не се гадае', () => {
+  const built = buildPayload([], [], {});
+  assert.equal(built.params.category, undefined);
+  assert.ok(built.warnings.some(w => w.includes('каросерия')));
+});
+
+await check('вътрешните полета не влизат в payload-а', () => {
+  const built = buildPayload(
+    [
+      { field_key: 'title', value: 'Audi Q7' },
+      { field_key: 'seller_name', value: 'RoyalCarsBG' },
+      { field_key: 'ad_type', value: 'Стандартна' },
+      { field_key: 'company_template', value: 'Стандартен' },
+      { field_key: 'description_language', value: 'Български' },
+      { field_key: 'mobile_bg_profile', value: 'x' },
+      { field_key: 'source_url', value: 'https://x' },
+      { field_key: 'doors', value: '4' },
+      { field_key: 'seats', value: '7' },
+      { field_key: 'drivetrain', value: '4x4' },
+    ],
+    [],
+  );
+  for (const key of ['zaglavie', 'seller_name', 'ad_type', 'company_template',
+                     'description_language', 'mobile_bg_profile', 'source_url',
+                     'doors', 'seats', 'drivetrain']) {
+    assert.equal(built.params[key], undefined, `${key} не бива да се изпраща`);
+  }
+  assert.ok(built.unmapped.some(row => row.field_key === 'title'), 'title се отчита като несъответстващо');
+});
+
 await check('полета без съответствие се отчитат, не се измислят', () => {
   const built = buildPayload([{ field_key: 'our_calculated_price', value: '42000' }], []);
   assert.equal(built.unmapped.length, 1);
@@ -184,7 +261,7 @@ await check('окончателното описание има предимст
     ],
     [],
   );
-  assert.equal(built.params.description, 'финално');
+  assert.equal(built.params.extinfo, 'финално');
 });
 
 await check('екстрите се събират в един параметър', () => {
@@ -254,9 +331,19 @@ const fullFields = [
 const oneImage = [{ source_url: 'https://example.com/a.jpg', local_path: null, is_selected: true, is_main: true, display_order: 1 }];
 
 await check('пълна чернова със снимки е готова', () => {
-  const readiness = checkReadiness({ fields: fullFields, extras: [], images: oneImage, hasCredentials: true, category: 'Автомобили и джипове' });
+  const readiness = checkReadiness({ fields: fullFields, extras: [], images: oneImage, hasCredentials: true, category: 'Автомобили и джипове', body: 'large_suv' });
   assert.equal(readiness.ready, true);
   assert.equal(summarizeReadiness(readiness), 'Готово за изпращане към Mobile.bg.');
+  assert.equal(readiness.payload.params.category, 'Джип');
+});
+
+await check('без тип каросерия черновата е готова, но с предупреждение', () => {
+  // `category` cannot be derived without a body, and Mobile.bg may require it, so
+  // the run must say so rather than send «Автомобили и джипове» as the body.
+  const readiness = checkReadiness({ fields: fullFields, extras: [], images: oneImage, hasCredentials: true, category: 'Автомобили и джипове' });
+  assert.equal(readiness.ready, true);
+  assert.equal(readiness.payload.params.category, undefined);
+  assert.ok(readiness.issues.some(issue => issue.code === 'CATEGORY' && issue.message.includes('каросерия')));
 });
 
 await check('липсващи задължителни полета спират изпращането', () => {
