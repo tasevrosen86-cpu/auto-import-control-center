@@ -430,7 +430,7 @@ if (ids.length > 0) {
   // shows what this dealership sends every time, which is what settles a field
   // whose codes carry no labels: `price_dds` offers 1, 2 and 3 and nothing says
   // which is which, but the value used across the whole lot is the one meant.
-  const sample = ids.slice(0, 30);
+  const sample = ids.slice(0, 200);
   const tally = {};
   for (const id of sample) {
     const one = await call('GET', `/import_api/advertload/${token}/?ida=${encodeURIComponent(id)}`);
@@ -461,12 +461,29 @@ if (ids.length > 0) {
         .replace(/<style[\s\S]*?<\/style>/gi, ' ')
         .replace(/<[^>]+>/g, ' ')
         .replace(/&nbsp;/g, ' ')
+        .replace(/&#8211;/g, '-')
         .replace(/\s+/g, ' ');
       console.log(`\n  ${url}  HTTP ${response.status}  дължина ${html.length}`);
-      for (const term of ['ДДС', 'данъчен', 'Освободена', 'Частна продажба']) {
-        const index = text.indexOf(term);
+      // Case-insensitive: the page may write «ддс» or «ДДС», and the first
+      // search for the capitalised form found nothing for that reason.
+      const lower = text.toLowerCase();
+      for (const term of ['ддс', 'данъч', 'освободен', 'частна продажба', 'без ддс', 'с ддс']) {
+        const index = lower.indexOf(term);
         if (index < 0) { console.log(`      «${term}»: не е намерен`); continue; }
-        console.log(`      «${term}»: ` + text.slice(Math.max(0, index - 250), index + 250));
+        console.log(`      «${term}»: ` + text.slice(Math.max(0, index - 300), index + 300));
+      }
+      // The price block itself, which is where the VAT wording would sit.
+      for (const term of ['186817', 'EUR']) {
+        const index = text.indexOf(term);
+        if (index >= 0) console.log(`\n      около «${term}»: ` + text.slice(Math.max(0, index - 400), index + 400));
+      }
+      // The raw HTML as well: the wording may sit in an attribute or a JSON
+      // blob, where stripping tags would remove it before the search sees it.
+      console.log('\n      суров HTML около «data-»/«price»: ');
+      for (const term of ['price_dds', 'dds', 'vat', 'данъч']) {
+        const index = html.toLowerCase().indexOf(term);
+        if (index < 0) { console.log(`        «${term}»: не е намерен в суровия HTML`); continue; }
+        console.log(`        «${term}»: ` + html.slice(Math.max(0, index - 200), index + 300).replace(/\s+/g, ' '));
       }
     } catch (cause) {
       console.log(`  ${url}  грешка:`, cause instanceof Error ? cause.message : String(cause));
