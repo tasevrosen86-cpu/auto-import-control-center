@@ -12,6 +12,7 @@ import {
   categoryToTopmenu, FIELD_TO_API, bodyToCategory, litresToCubicCentimetres,
 } from '../src/mapping.ts';
 import { checkReadiness, summarizeReadiness } from '../src/readiness.ts';
+import { resolvePictureListingId } from '../src/publish-id.ts';
 import { isJpeg, extensionOf, isAcceptableFilename, preparePictures } from '../src/pictures.ts';
 
 type StubResponse = { status: number; body: unknown };
@@ -600,6 +601,56 @@ await check('снимките се подават като пътища, раз�
   assert.equal(decoded, '/p/a.jpg~/p/b.jpg', 'пътищата се разделят с ~');
   assert.ok(!decoded.includes('http'), 'не се подават пълни URL адреси');
   assert.ok(!decoded.includes('autoimportcontrolcenter.biz'), 'домейнът е регистриран от Mobile.bg и не се повтаря');
+});
+
+// ------------------------------------------------------- listing id for pictures
+
+await check('нов publish: advertpub връща X, listing_id=X и advertpicts получава ida=X', async () => {
+  const { impl, calls } = stubFetch([
+    { status: 200, body: { status: 'success login', token: 't'.repeat(32) } },
+    { status: 200, body: { status: 'success pub', advert: { ida: '21234567890123456' } } },
+    { status: 200, body: { status: 'success picts' } },
+  ]);
+  const client = new MobileBgApiClient({ username: 'u', password: 'p', fetchImpl: impl });
+  await client.login();
+
+  const resolved = await resolvePictureListingId(client, { storedId: null, fields: { topmenu: '1', rub: '1', marka: 'BMW' } });
+  assert.equal(resolved.stop, null, 'няма причина за спиране');
+  assert.equal(resolved.ida, '21234567890123456', 'ida идва от advertpub');
+  // The id persisted to mobile_bg_publish_jobs.listing_id is the resolved one.
+  const listingIdWritten = resolved.ida;
+  assert.equal(listingIdWritten, '21234567890123456', 'listing_id=X');
+
+  // And that same id is what advertpicts is given.
+  const pictured = await client.advertPicts(resolved.ida!, 'add', { picts: '/mobilebg-pictures/d7/image-1.jpg' });
+  assert.equal(pictured.ok, true);
+  const pictureCall = calls.find(call => call.url.includes('/advertpicts/'));
+  const idaSent = new URLSearchParams(pictureCall!.body || '').get('ida');
+  assert.equal(idaSent, '21234567890123456', 'advertpicts получава ida=X');
+  assert.equal(idaSent, listingIdWritten, 'същото ID се записва и изпраща');
+});
+
+await check('retry със стар listing_id: ID не съществува -> advertpicts НЕ се извиква', async () => {
+  const { impl, calls } = stubFetch([
+    { status: 200, body: { status: 'success login', token: 't'.repeat(32) } },
+    // The read-only check of the stored id: Mobile.bg does not know it.
+    { status: 200, body: { status: 'error', msg: 'Wrong ida' } },
+  ]);
+  const client = new MobileBgApiClient({ username: 'u', password: 'p', fetchImpl: impl });
+  await client.login();
+
+  const resolved = await resolvePictureListingId(client, { storedId: '21790421438271594', fields: { topmenu: '1', rub: '1' } });
+  assert.equal(resolved.ida, null, 'невалидното id не се използва');
+  assert.ok(resolved.stop, 'спира с ясна грешка');
+  assert.equal(resolved.stop!.status, 'NEEDS_HUMAN_REVIEW');
+  assert.equal(resolved.stop!.stage, 'PICTURES_ID_CHECK');
+  assert.equal(resolved.stop!.clear_stored_id, true, 'невалидното listing_id се изчиства');
+
+  // The run stops before the picture step, so no advertpicts call is made.
+  const pictureCalls = calls.filter(call => call.url.includes('/advertpicts/'));
+  assert.equal(pictureCalls.length, 0, 'advertpicts не се извиква с невалидно ida');
+  // It did not guess another id by listing the account's adverts either.
+  assert.equal(calls.filter(call => call.url.includes('/adverts/')).length, 0, 'не се търси друго ID');
 });
 
 await check('всяко поле в таблицата има име за показване', () => {

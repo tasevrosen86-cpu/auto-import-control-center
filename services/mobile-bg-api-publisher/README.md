@@ -57,7 +57,15 @@ readable before its path is sent.
 A failure never loses the draft. The listing is published before the pictures, so
 a picture failure leaves a real, possibly paid, listing behind. The listing id is
 therefore written to `mobile_bg_publish_jobs.listing_id` as soon as it is known,
-and a retry **reuses it** instead of publishing a second listing.
+and a retry **corrects that same listing** instead of publishing a second one.
+
+The id the pictures are attached to is always the one `advertpub` returned in the
+current run. A stored id is only a hint about which listing to correct, and it is
+trusted only after `advertload` reads that listing back: an id Mobile.bg no
+longer recognises would otherwise be passed to `advertpicts` and refused with
+`Wrong ida`. When Mobile.bg does not know the stored id, the id is cleared and
+the run stops rather than guessing another one — guessing would risk a duplicate
+listing.
 
 ## Never call these automatically
 

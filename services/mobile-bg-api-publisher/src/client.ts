@@ -363,3 +363,31 @@ export function findListingId(payload: unknown): string | null {
   };
   return walk(payload, 0);
 }
+
+// The id `advertpicts` is given must be the one `advertpub` returned in the same
+// run. A stored id is only a hint for which listing to correct; promoting it to
+// a picture id is what made Mobile.bg answer `Wrong ida`. No id from the answer,
+// no pictures — the caller must stop rather than guess.
+export function listingIdFromPublish(publish: ApiCallResult<{ advert?: unknown }>): string | null {
+  if (!publish.ok) return null;
+  return findListingId(publish.payload);
+}
+
+// What to do with the listing id a previous run stored. Read-only: the id is
+// never handed to `advertpicts` on trust.
+//
+//   reuse  – Mobile.bg read the listing back, so the id is real and the
+//            pictures may be attached to it;
+//   clear  – Mobile.bg answered `Wrong ida`/`Invalid ida`, so this account has
+//            no such listing. The stored id is dropped and the run stops: a
+//            picture call would be refused, and picking another id would risk
+//            a duplicate listing;
+//   retry  – the check itself failed (network, expired token). The id is kept,
+//            because it may be perfectly good and clearing it would republish.
+export type StoredIdVerdict = 'reuse' | 'clear' | 'retry';
+
+export function classifyStoredId(load: ApiCallResult<{ advert?: unknown }>): StoredIdVerdict {
+  if (load.ok) return 'reuse';
+  if (/wrong ida|invalid ida/i.test(load.apiMsg || '')) return 'clear';
+  return 'retry';
+}

@@ -18,11 +18,15 @@
 //
 // Step 4 is the one that can leave the system half-done: the listing exists and
 // may already be paid for, but its pictures failed. The listing id is therefore
-// written to the job before the pictures are attempted, and a retry of that job
-// skips steps 3 and 4's listing creation and resumes at the pictures.
+// written to the job before the pictures are attempted. A retry corrects that
+// same listing instead of creating a second one, and the id the pictures are
+// given is always the one `advertpub` returned in the current run — never a
+// stored one, because a stored id that Mobile.bg no longer recognises is what
+// produced `Wrong ida`.
 
 import { createClient } from '@supabase/supabase-js';
-import { MobileBgApiClient, MobileBgApiError, findListingId, trimTrace, type TraceEntry } from './client.js';
+import { MobileBgApiClient, MobileBgApiError, trimTrace, type TraceEntry } from './client.js';
+import { resolvePictureListingId } from './publish-id.js';
 import { preparePictures, verifyPubliclyReadable, type SourceImage } from './pictures.js';
 import { checkReadiness, summarizeReadiness } from './readiness.js';
 import { EXTRI_SEPARATOR } from './mapping.js';
@@ -224,47 +228,29 @@ async function runJob(job: Job): Promise<void> {
       notes.push(`Изпращам ${Object.keys(sent).length} параметъра към категория ${sent.topmenu}.`);
 
       // --- Publish the listing --------------------------------------------
-      // When a previous attempt already created the listing, it is reused: a
-      // retry must not publish a second, duplicate advert.
-      let ida = job.listing_id;
-      if (ida) {
-        notes.push(`Продължавам със съществуваща обява ${ida} — няма да създавам втора.`);
-      } else {
-        const publish = await client.advertPub(sent);
-        trace.push(...client.trace.splice(0, client.trace.length));
-        if (!publish.ok) {
-          await persist('NEEDS_PUBLISHING', { readiness: readiness.issues, sent_params: Object.keys(sent) });
-          return await finishJob('NEEDS_PUBLISHING', {
-            stage: 'PUBLISH', readiness: readiness.issues,
-            sent_params: Object.keys(sent), trace_steps: trace.length,
-            message: 'Mobile.bg не прие обявата.',
-          }, publish.error || 'Обявата не бе приета.');
+      // The id the pictures are attached to is decided here and nowhere else:
+      // from the `advertpub` answer of this run, or from a stored id that
+      // Mobile.bg has just confirmed still exists.
+      const resolved = await resolvePictureListingId(client, { storedId: job.listing_id, fields: sent });
+      trace.push(...client.trace.splice(0, client.trace.length));
+      for (const note of resolved.notes) notes.push(note);
+      if (!resolved.ida) {
+        const stop = resolved.stop!;
+        if (stop.clear_stored_id) {
+          await db.from('mobile_bg_publish_jobs').update({ listing_id: null, updated_at: new Date().toISOString() }).eq('id', job.id);
         }
-        ida = findListingId(publish.payload);
-        if (!ida) {
-          // Published, but the id could not be read. The account list is the
-          // fallback; if that also fails the run stops here rather than
-          // guessing, because the pictures need a real id.
-          notes.push('⚠ Отговорът не съдържаше разпознаваемо ID (17 цифри).');
-          const list = await client.adverts();
-          trace.push(...client.trace.splice(0, client.trace.length));
-          const newest = Array.isArray(list.payload?.adverts) ? list.payload!.adverts![0] : null;
-          if (list.ok && newest?.ida) {
-            ida = String(newest.ida);
-            notes.push(`Взех ID от списъка на обявите: ${ida}.`);
-          } else {
-            await persist('NEEDS_HUMAN_REVIEW', { sent_params: Object.keys(sent) });
-            return await finishJob('NEEDS_HUMAN_REVIEW', {
-              stage: 'PUBLISH_ID',
-              sent_params: Object.keys(sent), trace_steps: trace.length,
-              message: 'Обявата може да е създадена, но Mobile.bg не върна ID. Провери списъка с обяви в акаунта, преди да опиташ пак, за да не се дублира.',
-            }, 'Mobile.bg не върна ID на обявата; не може да се продължи към снимките без него.');
-          }
-        }
+        await persist(stop.status, { readiness: readiness.issues, listing_id: stop.listing_id, sent_params: Object.keys(sent) });
+        return await finishJob(stop.status, {
+          stage: stop.stage, readiness: readiness.issues, listing_id: stop.listing_id,
+          sent_params: Object.keys(sent), trace_steps: trace.length,
+          message: stop.message,
+        }, stop.error);
+      }
+      const ida = resolved.ida;
+      if (!job.listing_id) {
         // Persisted before the pictures are attempted: this is what makes a
         // failed picture step retryable without republishing the listing.
         await db.from('mobile_bg_publish_jobs').update({ listing_id: ida, updated_at: new Date().toISOString() }).eq('id', job.id);
-        notes.push(`Обявата е приета с ID ${ida}.`);
       }
 
       // --- Pictures --------------------------------------------------------
