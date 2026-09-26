@@ -240,6 +240,56 @@ for (const path of ['/import_doc/', '/import_doc', '/import_api/']) {
 console.log('използван документ, дължина:', typeof doc.body === 'string' ? doc.body.length : 0);
 
 if (typeof doc.body === 'string' && doc.body.length > 0) {
+  // The page is a single-page app: stripping tags leaves only "Loading...", so
+  // the content is either embedded in a script tag as a JSON blob or fetched by
+  // the page's own JavaScript. The raw HTML is searched first, before any tag
+  // is removed, because a <script> is exactly where that blob would live.
+  console.log('\n  ### СУРОВ HTML — търсене на ключовите полета:');
+  const raw = doc.body;
+  for (const term of ['price_dds', 'extinfo', 'nup', 'opttext', 'catfields', 'advertpub']) {
+    const index = raw.indexOf(term);
+    console.log(`\n  «${term}»: ${index >= 0 ? 'намерен на ' + index : 'НЕ е намерен'}`);
+    if (index >= 0) console.log('      ' + raw.slice(Math.max(0, index - 300), index + 600).replace(/\s+/g, ' '));
+  }
+
+  // The assets the page loads, so the content source can be found if it is not
+  // inlined in the HTML.
+  const assets = [...raw.matchAll(/(?:src|href)\s*=\s*["']([^"']+)["']/gi)].map(match => match[1]);
+  console.log('\n  ### заредени ресурси:');
+  for (const asset of [...new Set(assets)].slice(0, 40)) console.log('      ' + asset);
+
+  // A single-page app loads its content from a bundle. The bundles are fetched
+  // and searched for the parameter names, since that is where the field
+  // descriptions and the example body would be.
+  const bundles = [...new Set(assets)].filter(asset => /\.m?js(\?|$)/i.test(asset)).slice(0, 8);
+  for (const bundle of bundles) {
+    const url = bundle.startsWith('http') ? bundle : base + (bundle.startsWith('/') ? bundle : '/' + bundle);
+    console.log(`\n  ### bundle ${url}`);
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(30000), headers: BROWSER_HEADERS });
+      const code = await response.text();
+      console.log('      HTTP', response.status, '| дължина', code.length);
+      for (const term of ['price_dds', 'extinfo', 'advertpub']) {
+        const index = code.indexOf(term);
+        if (index < 0) continue;
+        console.log(`      «${term}» на ${index}: ` + code.slice(Math.max(0, index - 400), index + 900).replace(/\s+/g, ' '));
+      }
+    } catch (cause) {
+      console.log('      грешка:', cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  // Endpoints the page itself may call to render the content.
+  for (const path of ['/import_doc/data', '/import_doc/api', '/import_doc/content', '/import_doc/doc.json', '/import_api/doc/']) {
+    const attempt = await call('GET', path);
+    const length = typeof attempt.body === 'string' ? attempt.body.length : 0;
+    console.log(`  ${path.padEnd(28)} HTTP ${attempt.status}  дължина ${length}`);
+    if (attempt.status === 200 && length > 200) console.log('      ' + scrub(attempt.body).slice(0, 1200).replace(/\s+/g, ' '));
+  }
+
+  console.log('\n  ### СУРОВ HTML — първите 3000 знака:');
+  console.log('      ' + raw.slice(0, 3000).replace(/\s+/g, ' '));
+
   const text = doc.body
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
