@@ -317,6 +317,30 @@ Migrations under `supabase/migrations/` are applied by hand in the Supabase SQL
 Editor. Write them idempotent, and guard with `to_regclass(...) is not null` so a
 table recreated by hand in the dashboard cannot fail the run.
 
+Deploy order matters, because the two halves ship separately. A push to `main`
+starts `deploy-vps.yml`, which builds and copies the site to
+autoimportcontrolcenter.biz. Nothing in CI applies migrations — no workflow
+mentions them — so the site can go live against a database that does not yet
+have the tables that build reads. Run the migrations first, then push.
+
+Check whether production has what the deployed site reads, before and after:
+
+```bash
+supabase/tests/verify_production_schema.sh
+```
+
+It uses the public key from the bundle and only reads. `PGRST205` means the
+table is absent — a failed deployment. `42501` means the table is there and the
+anonymous key simply holds no grant, which is the correct answer for anything
+scoped to a signed-in user. `supabase/manual/` holds migrations that are applied
+by hand later, on purpose, because something outside the database has to change
+first; the header of each one says what.
+
+Databases are not reachable as a migration target from here: no
+`SUPABASE_SERVICE_ROLE_KEY`, no `SUPABASE_ACCESS_TOKEN`, no DB password, no
+`psql`, and `apt-get` needs root. Verifying a migration therefore means the
+replay harness below, or asking the owner to run it.
+
 ## Verifying SQL changes
 
 Postgres can be installed locally (`apt-get install -y postgresql`) and the
@@ -455,40 +479,48 @@ draft. That part works — both edge functions are deployed and reachable, and t
 draft does get created.
 
 Nothing then ever processes the queue. `services/source-intake-worker` requires
-`SUPABASE_SERVICE_ROLE_KEY` and exits immediately without it. `deploy-vps.yml`
-builds the seam but never completes it: it unpacks the worker tarball into
-`/home/ubuntu/auto-import-control-center/services/source-intake-worker`, yet
-installs a systemd unit only for the publisher. There is no unit file anywhere in
-the repository for the intake worker — line 118 of the deploy only *reads* an
-`EnvironmentFiles` property from a `source-intake-worker.service` that has never
-been installed. No cron entry starts it either.
+`SUPABASE_SERVICE_ROLE_KEY` and exits immediately without it.
 
 Consequence: **URL import can never produce a populated draft, however complete
 the catalog flow becomes.** The draft stays empty and `source_listing_jobs` keeps
 the job `QUEUED` for ever. This is the second half of the original complaint, and
 it is a deployment gap rather than a code bug.
 
-Fix, when picking it up: add `SUPABASE_SERVICE_ROLE_KEY` as a repository secret,
-write it into `/etc/aicc-source-intake.env` in the deploy, and install the
-worker's `.service` and `.timer` the same way the publisher is installed. The
-worker always needs the service role key — it has no anon fallback, unlike the
-publisher. Its `ingest-source-listing` call also passes
+This has been fixed in `deploy-vps.yml`. The deploy now:
+
+1. writes `SUPABASE_SERVICE_ROLE_KEY` into `/etc/aicc-source-intake.env`;
+2. runs `npm ci` and `npx playwright install --with-deps chromium` in the
+   worker's directory, so its dependencies exist on the server;
+3. installs `aicc-source-intake.service` and `aicc-source-intake.timer` itself.
+
+The worker always needs the service role key — it has no anon fallback, unlike
+the publisher. Its `ingest-source-listing` call also passes
 `SUPABASE_SERVICE_ROLE_KEY` as the bearer token directly, so the key is not
 optional on any path.
 
-### Look for the owner's `SUPABASE_SERVICE_ROLE_KEY` GitHub secret first
+Two details worth keeping:
 
-The deploy already tries to find the service role key in this order:
+* The worker's install is the only part of the deploy that had never run on the
+  server, so it is deliberately non-fatal. A failure there raises a
+  `::warning::` and skips the unit rather than stopping the site and the
+  publishers from being updated.
+* `services/source-intake-worker/package-lock.json` is required by `npm ci`. It
+  did not exist and was generated; deleting it breaks the deploy step.
 
-1. the `Environment` property of any unit whose name matches
-   `(source|intake|worker|import|publish)`;
-2. the `EnvironmentFiles` of those same units;
-3. `${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}` — only if one was set up already.
+### The service role key comes from the repository secret
 
-The key is expected to be the owner's `SUPABASE_SERVICE_ROLE_KEY` repository
-secret, under exactly that name. Before building anything new, check whether it
-exists: if it does, the deploy starts picking it up on its own and the warning
-stops.
+`SUPABASE_SERVICE_ROLE_KEY` is read directly from
+`${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}` and written into the environment file
+of each worker that needs it. It is expected to be the owner's repository secret
+under exactly that name.
+
+The deploy used to *guess* the key instead: it walked every unit whose name
+matched `(source|intake|worker|import|publish)`, read that unit's `Environment`
+and `EnvironmentFiles`, and only fell back to the repository secret. That search
+is gone. It was both fragile and wrong: it is what picked up
+`snapd.autoimport.service`, a unit that belongs to snapd, as the "URL intake
+worker", and it made the publishers' credentials depend on which unrelated units
+happened to be installed on the host. The secret is now the single source.
 
 ## The public key is published on purpose
 
@@ -815,3 +847,68 @@ paths as configuration (`BROWSER_CDP_PATH`, `BROWSER_UPLOAD_PATH`) instead of
 hardcoding a guess, and `send()` is the single place to change once the real
 relay is known. If the gateway does not relay arbitrary CDP methods, that one
 function is rewritten; `form.mjs` stays as it is.
+
+## The Master Catalog stays a JSON file in the bundle, for now
+
+`src/data/master_catalog_v40.json` is imported directly by `src/lib/catalog.ts`,
+and `catalogSorted`, `catalogStats` and the filter helpers are **synchronous
+constants** computed at module load. `VehicleList` reads them without awaiting
+anything. That is the working shape on `main`, and it is deliberate: the catalogue
+is still being edited — makes, models and rows are added and corrected — so
+moving it into a table now would mean re-importing 4674 rows on every change.
+
+An earlier change on `feat/royal-cars-tenant-stage-1` rewrote `catalog.ts` to read
+from a `master_catalog` table and made `loadCatalog()` async, and moved the JSON
+out of `src/data/`. That is wrong for now and was reverted. **Do not reintroduce
+it.** Specifically:
+
+* `catalog.ts` must keep importing the JSON, and its exports must stay
+  synchronous. Changing `loadCatalog()` to return a promise turns every caller
+  into a loading state, and there is exactly one caller today.
+* The file must stay at `src/data/`, because the import alias is `@/*` → `src/*`.
+  A copy in a top-level `data/` is outside the alias and outside `tsconfig`'s
+  `include`, so `@/data/...` stops resolving.
+* The `master_catalog` table exists and is administrator-only, but it is **empty
+  on purpose**. A frontend that reads it sees nothing at all. Do not fill it.
+
+When the catalogue is final, the move is a separate decision — either replace the
+JSON file wholesale, or import it into the table with
+`scripts/load_master_catalog.ts` and change `catalog.ts` in the same commit. Until
+then, the JSON in the bundle is the catalogue of record, and the build is ~9 MB
+because of it.
+
+
+## Migrations are applied by hand, and the SQL Editor is not transactional
+
+`supabase/migrations/` is applied by pasting each file into the Supabase SQL
+Editor, not by `supabase db push`. The editor runs statements one at a time and
+keeps what succeeded, so a migration that fails part-way leaves a half-applied
+database behind — and re-running it meets its own leavings.
+
+This happened: `20260925130000_royal_cars_tenant_isolation.sql` failed with
+`42883: function public.current_company_id() does not exist`, because an earlier
+attempt had been interrupted and the helper was dropped but not yet recreated.
+
+Two rules follow, and both matter more here than in a repository that applies
+migrations atomically:
+
+* Never rely on a migration being all-or-nothing. Write every statement so that
+  running the file twice, or after a partial run, ends in the same state:
+  `if not exists`, `on conflict do nothing`, `create or replace`, and an explicit
+  `drop ... if exists` before anything that has no `if not exists` form (policies,
+  triggers, and functions whose signature is changing).
+* Define the helper functions a migration depends on *inside that migration*,
+  above their first use, rather than assuming an earlier file left them. A
+  migration that can only run on a pristine database is a migration that cannot
+  be recovered.
+
+`create or replace function f()` is also the only form that omits the argument
+list; `create or replace function f(uuid)` creates a *second* function, and a
+zero-argument call then resolves to neither, or to the wrong one. When adding a
+defaulted argument, drop the old signature explicitly — Postgres matches
+`create or replace` on the full argument list.
+
+`scripts/parse_migrations.py` parses every migration with `pglast` (libpg_query,
+the parser Postgres itself uses). It catches syntax, not semantics, but a syntax
+error found before the paste is worth it: a paste into production has no undo.
+It needs `pip install pglast`, and the interpreter must be the one that has it.

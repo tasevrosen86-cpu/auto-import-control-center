@@ -1,0 +1,499 @@
+// Read-only probe of the official Mobile.bg import API.
+//
+// Why this exists: `advertpub` answers `{"status":"error","msg":"Wrong fields",
+// "fields":[...]}` and names the offending parameters, but `catfields` returns
+// only `fname`/`ftype`/`ftext` — never the accepted values. Those live behind
+// `dictionary`. The publisher declares a `dictionary()` client method but never
+// calls it, so no list value has ever been checked against Mobile.bg's own list.
+//
+// This script reads the schema and the dictionaries and compares them with the
+// exact values our draft holds. It calls login -> catfields -> dictionary ->
+// logout. `advertpub` and `advertpicts` are never called, so no listing is
+// created, nothing is billed and no draft is touched.
+//
+// Run it where api.mobile.bg is reachable (the VPS): from CI the API answers a
+// Cloudflare 403 before the request is ever seen.
+//
+//   node scripts/mobile-bg-api-probe.mjs /etc/aicc-mobile-bg-api.env
+//
+// The token, the username and the password are never printed.
+
+import { readFileSync } from 'node:fs';
+
+const envPath = process.argv[2] || '/etc/aicc-mobile-bg-api.env';
+
+// systemd's EnvironmentFile is not shell-parsed, so it is read the same way
+// here: raw KEY=VALUE with an optional `export` and optional surrounding quotes.
+function readEnvFile(path) {
+  const env = {};
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    const match = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+    if (!match) continue;
+    let value = match[2].trim();
+    const quoted = value.length > 1
+      && ((value[0] === '"' && value.endsWith('"')) || (value[0] === "'" && value.endsWith("'")));
+    if (quoted) value = value.slice(1, -1);
+    env[match[1]] = value;
+  }
+  return env;
+}
+
+const env = readEnvFile(envPath);
+const base = (env.MOBILE_BG_API_BASE_URL || 'https://api.mobile.bg').replace(/\/+$/, '');
+const username = env.MOBILE_BG_API_USERNAME || env.MOBILE_BG_USERNAME || '';
+const password = env.MOBILE_BG_API_PASSWORD || env.MOBILE_BG_PASSWORD || '';
+
+let token = '';
+
+// Anything that could carry a credential is scrubbed before it is printed, in
+// one place, so no call site can forget to do it.
+function scrub(value) {
+  let text = typeof value === 'string' ? value : JSON.stringify(value);
+  if (text === undefined) return '';
+  for (const secret of [token, username, password]) {
+    if (secret && secret.length >= 4) text = text.split(secret).join('<скрито>');
+  }
+  return text;
+}
+
+async function call(method, path, options = {}) {
+  const init = { method, signal: AbortSignal.timeout(30000), headers: { ...(options.headers || {}) } };
+  if (options.form) {
+    init.headers['content-type'] = 'application/x-www-form-urlencoded';
+    init.body = new URLSearchParams(options.form).toString();
+  }
+  try {
+    const response = await fetch(base + path, init);
+    const text = await response.text();
+    let body;
+    try { body = text ? JSON.parse(text) : null; } catch { body = text; }
+    return { status: response.status, body };
+  } catch (cause) {
+    return { status: null, body: { network_error: cause instanceof Error ? cause.message : String(cause) } };
+  }
+}
+
+function heading(title) {
+  console.log(`\n===== ${title} =====`);
+}
+
+function printRaw(result, limit = 1500) {
+  console.log('HTTP', result.status);
+  console.log(scrub(result.body).slice(0, limit));
+}
+
+// A dictionary answers `{ "<field>": [ { optval, opttext }, ... ] }`, where
+// `optval` is what has to be sent and `opttext` is only the label shown on the
+// site. The two are easy to confuse and the difference is the whole bug, so
+// they are printed as a pair, and `optval` alone is what the comparison uses.
+function describeDictionary(label, result) {
+  heading(`DICTIONARY ${label}`);
+  console.log('HTTP', result.status);
+  const body = result.body;
+  if (!body || typeof body !== 'object') { printRaw(result); return { values: [], labels: [] }; }
+
+  const values = [];
+  const labels = [];
+  for (const [field, entries] of Object.entries(body)) {
+    const list = Array.isArray(entries) ? entries : [entries];
+    console.log(`  поле: ${field}  (записи: ${list.length})`);
+    for (const entry of list) {
+      if (entry && typeof entry === 'object') {
+        const value = entry.optval ?? entry.value ?? entry.id ?? null;
+        const text = entry.opttext ?? entry.ftext ?? entry.name ?? entry.label ?? '';
+        console.log('    optval=' + String(value ?? '').padEnd(10) + 'opttext=' + String(text));
+        if (value !== null && value !== undefined) values.push(String(value));
+        if (text) labels.push(String(text));
+      } else {
+        console.log('    ' + String(entry));
+        values.push(String(entry));
+      }
+    }
+  }
+  if (values.length === 0 && labels.length === 0) printRaw(result);
+  return { values, labels };
+}
+
+// Reports whether our exact value is one the API itself accepts. The
+// distinction that matters is `optval` versus `opttext`: `optval` is the value
+// `advertpub` validates, while `opttext` is only the label rendered on the site.
+// A value that matches an `opttext` but no `optval` is exactly the shape of a
+// rejected field, so that case is called out separately rather than as a hit.
+function compare(label, ours, options, labels) {
+  console.log(`\n----- ${label} -----`);
+  console.log('  наша стойност:', JSON.stringify(ours));
+  const values = options || [];
+  const texts = labels || [];
+  if (values.length === 0 && texts.length === 0) { console.log('  речникът е празен или неразчетен'); return; }
+
+  const lower = String(ours).toLowerCase();
+  const valueHit = values.includes(ours);
+  const valueCaseOnly = values.find(value => value.toLowerCase() === lower);
+  const labelHit = texts.includes(ours);
+  const labelCaseOnly = texts.find(text => text.toLowerCase() === lower);
+
+  if (valueHit) console.log('  ✅ приема се: съвпада с optval');
+  else if (valueCaseOnly) console.log('  ⚠ съвпада с optval само по регистър:', JSON.stringify(valueCaseOnly));
+  else if (labelHit) console.log('  ❌ ОТХВЪРЛЯ СЕ: съвпада само с opttext (етикет), не с optval');
+  else if (labelCaseOnly) console.log('  ❌ ОТХВЪРЛЯ СЕ: съвпада с opttext само по регистър:', JSON.stringify(labelCaseOnly));
+  else console.log('  ❌ ОТХВЪРЛЯ СЕ: няма нито optval, нито opttext');
+
+  if (!valueHit) {
+    const pairs = values.map((value, index) => `${value}=${texts[index] ?? ''}`);
+    console.log('  optval=opttext:', pairs.length ? JSON.stringify(pairs) : '(няма)');
+  }
+}
+
+console.log('база:', base);
+console.log('потребител зададен:', username ? 'да' : 'НЕ');
+console.log('парола зададена:', password ? 'да' : 'НЕ');
+if (!username || !password) {
+  console.error('::error::липсват MOBILE_BG_API_USERNAME / MOBILE_BG_API_PASSWORD');
+  process.exit(1);
+}
+
+// --- login -----------------------------------------------------------------
+heading('ВХОД');
+const login = await call('POST', '/import_api/login', { form: { username, password } });
+console.log('HTTP', login.status, '| status:', login.body?.status ?? null);
+token = login.body?.token || '';
+if (!token) {
+  console.log('НЯМА TOKEN:', scrub(login.body).slice(0, 300));
+  process.exit(1);
+}
+console.log('token: получен, дължина', token.length);
+
+// --- catfields -------------------------------------------------------------
+// The full schema, printed as fname / ftype / ftext. This is what `advertpub`
+// validates against, and the excerpt stored in `api_trace` is truncated at 600
+// characters, so the complete list has never been visible before.
+heading('CATFIELDS 1/1 (пълен)');
+const catfields = await call('GET', '/import_api/catfields/1/1/');
+console.log('HTTP', catfields.status);
+if (catfields.body && typeof catfields.body === 'object' && !Array.isArray(catfields.body)) {
+  for (const [key, value] of Object.entries(catfields.body)) {
+    console.log('  ' + String(value?.fname ?? key).padEnd(22) + String(value?.ftype ?? '').padEnd(10) + String(value?.ftext ?? ''));
+  }
+  console.log('общо полета:', Object.keys(catfields.body).length);
+} else {
+  printRaw(catfields);
+}
+
+// --- dictionaries ----------------------------------------------------------
+// Every list field in the minimal payload, plus the three the API named as
+// wrong, so a single run answers all of them.
+const listFields = ['nup', 'category', 'price_dds', 'marka', 'month', 'year', 'engine_type', 'transmission', 'color', 'locat', 'locatc', 'currency', 'euroclass', 'rub', 'term', 'extri', 'topmenu'];
+const collected = {};
+
+const wholeCategory = await call('GET', '/import_api/dictionary/1/1/');
+describeDictionary('1/1 (цяла категория)', wholeCategory);
+
+for (const field of listFields) {
+  let result = await call('GET', `/import_api/dictionary/1/1/${field}/`);
+  // The publisher's client assumes no token is needed; this has never been run,
+  // so a rejected call is retried with the token in the query rather than
+  // concluding the dictionary does not exist.
+  const failed = !result.body || typeof result.body === 'string' || result.status !== 200;
+  if (failed) {
+    const withToken = await call('GET', `/import_api/dictionary/1/1/${field}/?token=${encodeURIComponent(token)}`);
+    if (withToken.status === 200 && withToken.body && typeof withToken.body === 'object') result = withToken;
+  }
+  collected[field] = describeDictionary(field, result);
+  // The three fields the API named as wrong are also printed raw: the exact
+  // shape matters, and a rendering can hide an unexpected nesting.
+  if (['nup', 'category', 'price_dds'].includes(field)) {
+    console.log('  суров JSON:', scrub(result.body).slice(0, 1200));
+  }
+}
+
+// --- model -----------------------------------------------------------------
+// `model` is scoped to the chosen make, which is why the same parameter can be
+// accepted for one car and rejected for another.
+for (const make of ['Audi', 'Hyundai']) {
+  const result = await call('GET', `/import_api/dictionary/1/1/model/?marka=${encodeURIComponent(make)}`);
+  collected[`model:${make}`] = describeDictionary(`model?marka=${make}`, result);
+}
+
+// --- documentation ---------------------------------------------------------
+// The docs publish one worked example body and describe each parameter. They
+// answer the two things a dictionary cannot: `price_dds` has numeric options
+// with no labels, and `extinfo` may or may not be the description. The page is
+// fetched here rather than read from the repository because it is served only
+// to the VPS network.
+heading('ДОКУМЕНТАЦИЯ /import_doc/');
+let doc = { status: null, body: '' };
+const BROWSER_HEADERS = {
+  'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+  'accept': 'text/html,application/xhtml+xml',
+  'accept-language': 'bg,en;q=0.9',
+};
+for (const path of ['/import_doc/', '/import_doc', '/import_api/']) {
+  for (const [mode, options] of [['plain', {}], ['browser', { headers: BROWSER_HEADERS }]]) {
+    const attempt = await call('GET', path, options);
+    const length = typeof attempt.body === 'string' ? attempt.body.length : 0;
+    console.log(`  ${path.padEnd(16)} ${mode.padEnd(8)} HTTP ${attempt.status}  дължина ${length}`);
+    if (attempt.status === 200 && length > 2000) { doc = attempt; break; }
+    if (attempt.status === 200 && length > (typeof doc.body === 'string' ? doc.body.length : 0)) doc = attempt;
+  }
+  if (typeof doc.body === 'string' && doc.body.length > 2000) break;
+}
+console.log('използван документ, дължина:', typeof doc.body === 'string' ? doc.body.length : 0);
+
+if (typeof doc.body === 'string' && doc.body.length > 0) {
+  // The page is a single-page app: stripping tags leaves only "Loading...", so
+  // the content is either embedded in a script tag as a JSON blob or fetched by
+  // the page's own JavaScript. The raw HTML is searched first, before any tag
+  // is removed, because a <script> is exactly where that blob would live.
+  console.log('\n  ### СУРОВ HTML — търсене на ключовите полета:');
+  const raw = doc.body;
+  for (const term of ['price_dds', 'extinfo', 'nup', 'opttext', 'catfields', 'advertpub']) {
+    const index = raw.indexOf(term);
+    console.log(`\n  «${term}»: ${index >= 0 ? 'намерен на ' + index : 'НЕ е намерен'}`);
+    if (index >= 0) console.log('      ' + raw.slice(Math.max(0, index - 300), index + 600).replace(/\s+/g, ' '));
+  }
+
+  // The assets the page loads, so the content source can be found if it is not
+  // inlined in the HTML.
+  // The assets are relative to the page, not to the host root: the HTML links
+  // `vendor/polyfill.js`, which lives at /import_doc/vendor/polyfill.js. Resolving
+  // them against the bare host is what made the first attempt 404.
+  const assets = [...raw.matchAll(/(?:src|href)\s*=\s*["']([^"']+)["']/gi)].map(match => match[1]);
+  const docDir = '/import_doc/';
+  const resolve = (asset) => {
+    if (/^https?:\/\//i.test(asset)) return asset;
+    if (asset.startsWith('/')) return base + asset;
+    return base + docDir + asset.replace(/^\.\//, '');
+  };
+  console.log('\n  ### заредени ресурси:');
+  for (const asset of [...new Set(assets)].slice(0, 40)) console.log('      ' + resolve(asset));
+
+  // The page is apidoc output, which keeps its data in a separate script. Every
+  // script the page loads is fetched and searched for the parameter names, since
+  // that is where the field descriptions and the example body live.
+  const scripts = [...new Set([
+    ...assets.filter(asset => /\.js(\?|$)/i.test(asset)),
+    'api_data.js', 'assets/main.js', 'assets/api_data.js', 'main.js', 'data.js',
+  ])];
+  for (const script of scripts.slice(0, 10)) {
+    const url = resolve(script);
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(30000), headers: BROWSER_HEADERS });
+      const code = await response.text();
+      console.log(`\n  ### скрипт ${url}  HTTP ${response.status}  дължина ${code.length}`);
+      if (response.status !== 200) continue;
+      for (const term of ['price_dds', 'extinfo', 'advertpub', 'opttext']) {
+        const index = code.indexOf(term);
+        if (index < 0) { console.log(`      «${term}»: не е намерен`); continue; }
+        console.log(`      «${term}» на ${index}: ` + code.slice(Math.max(0, index - 500), index + 1200).replace(/\s+/g, ' '));
+      }
+      // The data file is small enough to print in full, and it is the only place
+      // the field descriptions live, so it is dumped rather than searched.
+      if (/api_data\.js$/i.test(script)) {
+        console.log('\n  ### ЦЕЛИЯТ api_data.js:');
+        console.log(code);
+      }
+    } catch (cause) {
+      console.log(`\n  ### скрипт ${url}  грешка:`, cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  // The tail of the HTML holds the script tags that boot the page.
+  console.log('\n  ### СУРОВ HTML — последните 2500 знака:');
+  console.log('      ' + raw.slice(-2500).replace(/\s+/g, ' '));
+
+  console.log('\n  ### СУРОВ HTML — първите 3000 знака:');
+  console.log('      ' + raw.slice(0, 3000).replace(/\s+/g, ' '));
+
+  const text = doc.body
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li|tr|h[1-6]|pre)>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n\s*\n+/g, '\n');
+  console.log('дължина на текста:', text.length);
+
+  // The whole page is long, so the parts that matter are pulled out by term.
+  for (const term of ['price_dds', 'extinfo', 'nup', 'category', 'locatc', 'term', 'extri',
+                      'описание', 'Допълнителна', 'engine_power', 'engine_cubature', 'ДДС', 'Заглавие']) {
+    const hits = [];
+    const lines = text.split('\n');
+    lines.forEach((line, index) => {
+      if (line.toLowerCase().includes(term.toLowerCase())) {
+        hits.push(`      ${lines.slice(Math.max(0, index - 1), index + 3).join(' ⏎ ').slice(0, 400)}`);
+      }
+    });
+    console.log(`\n  ### споменавания на «${term}»: ${hits.length}`);
+    for (const hit of hits.slice(0, 6)) console.log(hit);
+  }
+
+  // The example body is what proves which parameter names are real.
+  const exampleStart = text.search(/advertpub/i);
+  if (exampleStart >= 0) {
+    console.log('\n  ### около «advertpub»:');
+    console.log(text.slice(exampleStart, exampleStart + 2500).split('\n').map(line => '      ' + line).join('\n'));
+  }
+
+  // The full text, so nothing that matters is missed by a search term.
+  console.log('\n  ### ЦЕЛИЯТ ТЕКСТ НА ДОКУМЕНТА:');
+  console.log(text.slice(0, 20000).split('\n').map(line => '      ' + line).join('\n'));
+} else {
+  printRaw(doc, 800);
+}
+
+// --- our values ------------------------------------------------------------
+// The exact strings from draft ede5e898 (Audi Q7, job cae12df8) and draft
+// 31e70aed (Hyundai TUCSON, job ac4f218d), so the comparison is against what
+// was really sent rather than a reconstruction.
+console.log('\n\n############ СРАВНЕНИЕ С ИЗПРАТЕНИТЕ СТОЙНОСТИ ############');
+compare('nup ← condition "Употребяван" (изпратено)', 'Употребяван', (collected.nup || {}).values, (collected.nup || {}).labels);
+compare('nup ← condition "Използван" (в черновата)', 'Използван', (collected.nup || {}).values, (collected.nup || {}).labels);
+compare('category ← чернова "Автомобили и джипове" (НЕ се изпраща)', 'Автомобили и джипове', (collected.category || {}).values, (collected.category || {}).labels);
+compare('category ← "1" (topmenu)', '1', (collected.category || {}).values, (collected.category || {}).labels);
+compare('price_dds ← vat_included "Цената е с включено ДДС" (пращаме като dds)', 'Цената е с включено ДДС', (collected.price_dds || {}).values, (collected.price_dds || {}).labels);
+compare('marka "Audi"', 'Audi', (collected.marka || {}).values, (collected.marka || {}).labels);
+compare('marka "Hyundai"', 'Hyundai', (collected.marka || {}).values, (collected.marka || {}).labels);
+compare('model "Q7" (Audi)', 'Q7', (collected['model:Audi'] || {}).values, (collected['model:Audi'] || {}).labels);
+compare('model "TUCSON" (Hyundai)', 'TUCSON', (collected['model:Hyundai'] || {}).values, (collected['model:Hyundai'] || {}).labels);
+compare('month "Април"', 'Април', (collected.month || {}).values, (collected.month || {}).labels);
+compare('year "2025"', '2025', (collected.year || {}).values, (collected.year || {}).labels);
+compare('engine_type "Бензин"', 'Бензин', (collected.engine_type || {}).values, (collected.engine_type || {}).labels);
+compare('transmission "Автоматична"', 'Автоматична', (collected.transmission || {}).values, (collected.transmission || {}).labels);
+compare('color "Черен"', 'Черен', (collected.color || {}).values, (collected.color || {}).labels);
+compare('locat "Извън страната"', 'Извън страната', (collected.locat || {}).values, (collected.locat || {}).labels);
+compare('locatc "Канада"', 'Канада', (collected.locatc || {}).values, (collected.locatc || {}).labels);
+compare('currency "EUR"', 'EUR', (collected.currency || {}).values, (collected.currency || {}).labels);
+compare('euroclass ← euro_standard "Euro 6"', 'Euro 6', (collected.euroclass || {}).values, (collected.euroclass || {}).labels);
+
+// The values the worker actually puts on the wire, after VALUE_ALIASES. The
+// drafts hold `Бензин` and `Април`, but the alias turns them into `Бензинов`
+// and `април` before the request, so those are what has to match.
+console.log('\n\n############ РЕАЛНО ИЗПРАТЕНИТЕ СТОЙНОСТИ (СЛЕД ALIAS) ############');
+compare('engine_type ← fuel "Бензин" → alias "Бензинов"', 'Бензинов', (collected.engine_type || {}).values, (collected.engine_type || {}).labels);
+compare('month ← month "Април" → alias "април"', 'април', (collected.month || {}).values, (collected.month || {}).labels);
+compare('nup ← condition "Използван" → alias "Употребяван"', 'Употребяван', (collected.nup || {}).values, (collected.nup || {}).labels);
+compare('nup ← предложение "0" (optval за Употребяван)', '0', (collected.nup || {}).values, (collected.nup || {}).labels);
+compare('category ← предложение "Джип"', 'Джип', (collected.category || {}).values, (collected.category || {}).labels);
+compare('price_dds ← предложение "1"', '1', (collected.price_dds || {}).values, (collected.price_dds || {}).labels);
+compare('euroclass ← предложение "6"', '6', (collected.euroclass || {}).values, (collected.euroclass || {}).labels);
+compare('extri ← "4(5) Врати"', '4(5) Врати', (collected.extri || {}).values, (collected.extri || {}).labels);
+compare('extri ← "7 места"', '7 места', (collected.extri || {}).values, (collected.extri || {}).labels);
+compare('extri ← "4x4"', '4x4', (collected.extri || {}).values, (collected.extri || {}).labels);
+compare('topmenu ← "1"', '1', (collected.topmenu || {}).values, (collected.topmenu || {}).labels);
+
+// --- a real published advert -----------------------------------------------
+// The dictionaries say which values are legal; an advert that Mobile.bg already
+// accepted says which values this dealership actually sends, under the names the
+// API stores. That is the only way to settle `price_dds`, whose three numeric
+// options carry no labels, and `extinfo`, which the documentation never names.
+// `adverts` lists the ids and `advertload` reads one: both are GETs, and neither
+// creates, changes or removes anything.
+heading('РЕАЛНА ПУБЛИКУВАНА ОБЯВА (read-only)');
+const adverts = await call('GET', `/import_api/adverts/${token}/`);
+console.log('HTTP', adverts.status);
+const ids = [];
+if (adverts.body && typeof adverts.body === 'object') {
+  const list = adverts.body.adverts ?? adverts.body.advert ?? [];
+  for (const item of Array.isArray(list) ? list : [list]) {
+    const id = item && typeof item === 'object' ? (item.ida ?? item.id) : item;
+    if (id) ids.push(String(id));
+  }
+  console.log('обяви в автокъщата:', ids.length, ids.length ? '(първите 5: ' + ids.slice(0, 5).join(', ') + ')' : '');
+} else {
+  printRaw(adverts, 600);
+}
+
+if (ids.length > 0) {
+  const loaded = await call('GET', `/import_api/advertload/${token}/?ida=${encodeURIComponent(ids[0])}&pretty=1`);
+  console.log('HTTP', loaded.status, 'за ida', ids[0]);
+  const advert = loaded.body && typeof loaded.body === 'object' ? (loaded.body.advert ?? loaded.body) : null;
+  if (advert && typeof advert === 'object') {
+    // Printed as a table, so the exact stored value of each field is readable.
+    // Non-scalars are shown too, since `extri` is expected to be a list.
+    for (const [field, value] of Object.entries(advert)) {
+      const shown = value && typeof value === 'object' ? JSON.stringify(value) : String(value ?? '');
+      console.log('  ' + String(field).padEnd(22) + ' = ' + scrub(shown).slice(0, 140));
+    }
+    console.log('\n  суров JSON:', scrub(JSON.stringify(advert)).slice(0, 4000));
+  } else {
+    printRaw(loaded, 2000);
+  }
+
+  // A single advert only shows what that one listing sent. A spread of them
+  // shows what this dealership sends every time, which is what settles a field
+  // whose codes carry no labels: `price_dds` offers 1, 2 and 3 and nothing says
+  // which is which, but the value used across the whole lot is the one meant.
+  const sample = ids.slice(0, 200);
+  const tally = {};
+  for (const id of sample) {
+    const one = await call('GET', `/import_api/advertload/${token}/?ida=${encodeURIComponent(id)}`);
+    const row = one.body && typeof one.body === 'object' ? (one.body.advert ?? one.body) : null;
+    if (!row || typeof row !== 'object') continue;
+    for (const field of ['price_dds', 'nup', 'category', 'term', 'euroclass', 'engine_cubature',
+                         'engine_power', 'locat', 'locatc', 'currency', 'engine_type', 'extri']) {
+      const value = row[field] === undefined ? '(липсва)' : String(row[field] ?? '');
+      tally[field] = tally[field] || {};
+      tally[field][value] = (tally[field][value] || 0) + 1;
+    }
+  }
+  console.log(`\n  ### разпределение на стойностите в ${sample.length} обяви (най-честите):`);
+  for (const [field, counts] of Object.entries(tally)) {
+    const top = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 5)
+      .map(([value, count]) => `${JSON.stringify(value.slice(0, 32))}×${count}`).join('   ');
+    console.log('    ' + field.padEnd(18) + top);
+  }
+
+  // The public advert page spells the VAT wording out, which is what the
+  // unlabelled `price_dds` codes stand for. A plain read-only page fetch.
+  heading('ПУБЛИЧНА СТРАНИЦА НА ОБЯВАТА (read-only)');
+  for (const url of [`https://www.mobile.bg/obiava-${ids[0]}`, `https://www.mobile.bg/obiava-${ids[0]}/`]) {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(30000), headers: BROWSER_HEADERS });
+      const html = await response.text();
+      const text = html.replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&#8211;/g, '-')
+        .replace(/\s+/g, ' ');
+      console.log(`\n  ${url}  HTTP ${response.status}  дължина ${html.length}`);
+      // Case-insensitive: the page may write «ддс» or «ДДС», and the first
+      // search for the capitalised form found nothing for that reason.
+      const lower = text.toLowerCase();
+      for (const term of ['ддс', 'данъч', 'освободен', 'частна продажба', 'без ддс', 'с ддс']) {
+        const index = lower.indexOf(term);
+        if (index < 0) { console.log(`      «${term}»: не е намерен`); continue; }
+        console.log(`      «${term}»: ` + text.slice(Math.max(0, index - 300), index + 300));
+      }
+      // The price block itself, which is where the VAT wording would sit.
+      for (const term of ['186817', 'EUR']) {
+        const index = text.indexOf(term);
+        if (index >= 0) console.log(`\n      около «${term}»: ` + text.slice(Math.max(0, index - 400), index + 400));
+      }
+      // The raw HTML as well: the wording may sit in an attribute or a JSON
+      // blob, where stripping tags would remove it before the search sees it.
+      console.log('\n      суров HTML около «data-»/«price»: ');
+      for (const term of ['price_dds', 'dds', 'vat', 'данъч']) {
+        const index = html.toLowerCase().indexOf(term);
+        if (index < 0) { console.log(`        «${term}»: не е намерен в суровия HTML`); continue; }
+        console.log(`        «${term}»: ` + html.slice(Math.max(0, index - 200), index + 300).replace(/\s+/g, ' '));
+      }
+    } catch (cause) {
+      console.log(`  ${url}  грешка:`, cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+}
+
+// --- logout ----------------------------------------------------------------
+heading('ИЗХОД');
+const logout = await call('POST', `/import_api/logout/${token}/`);
+console.log('HTTP', logout.status);
+console.log(scrub(logout.body).slice(0, 200));
+token = '';

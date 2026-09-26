@@ -32,7 +32,8 @@ CREATE POLICY "anon_select_source_listing_jobs" ON source_listing_jobs FOR SELEC
 DROP POLICY IF EXISTS "anon_insert_source_listing_jobs" ON source_listing_jobs;
 CREATE POLICY "anon_insert_source_listing_jobs" ON source_listing_jobs FOR INSERT
   TO anon, authenticated WITH CHECK (true);
-DROP POLICY IF EXISTS "anon_update_source_listing_jobs" ON source_listing_jobs FOR UPDATE
+DROP POLICY IF EXISTS "anon_update_source_listing_jobs" ON source_listing_jobs;
+CREATE POLICY "anon_update_source_listing_jobs" ON source_listing_jobs FOR UPDATE
   TO anon, authenticated USING (true) WITH CHECK (true);
 
 CREATE INDEX IF NOT EXISTS idx_source_listing_jobs_queue ON source_listing_jobs(status, created_at);
