@@ -208,7 +208,7 @@ await check('каросерията отива в category, не основна�
   assert.equal(bodyToCategory('pickup'), 'Пикап');
   assert.equal(bodyToCategory('other', 'Dodge'), 'Пикап', 'при other решава марката');
   assert.equal(bodyToCategory('other', 'Mercedes-Benz'), 'Седан');
-  assert.equal(bodyToCategory('other', 'Audi'), null, 'не се гадае');
+  assert.equal(bodyToCategory(null, 'Audi'), 'Джип', 'без каросерия остава доказаният от реален запис «Джип»');
 
   const built = buildPayload([{ field_key: 'make', value: 'Audi' }], [], { body: 'large_suv' });
   assert.equal(built.params.category, 'Джип');
@@ -216,10 +216,13 @@ await check('каросерията отива в category, не основна�
   assert.notEqual(built.params.category, 'Автомобили и джипове');
 });
 
-await check('непознат тип каросерия се отчита, не се гадае', () => {
+await check('category се изпраща винаги, защото Mobile.bg го изисква', () => {
+  // The publish was refused with {"fields":["category"]} while this parameter
+  // was omitted. No draft carries a body, so the fallback is the only path that
+  // reaches the API in practice.
   const built = buildPayload([], [], {});
-  assert.equal(built.params.category, undefined);
-  assert.ok(built.warnings.some(w => w.includes('каросерия')));
+  assert.equal(built.params.category, 'Джип');
+  assert.ok(!built.warnings.some(w => w.includes('каросерия')), 'вече няма предупреждение за неопределена каросерия');
 });
 
 await check('вътрешните полета не влизат в payload-а', () => {
@@ -337,13 +340,14 @@ await check('пълна чернова със снимки е готова', () 
   assert.equal(readiness.payload.params.category, 'Джип');
 });
 
-await check('без тип каросерия черновата е готова, но с предупреждение', () => {
-  // `category` cannot be derived without a body, and Mobile.bg may require it, so
-  // the run must say so rather than send «Автомобили и джипове» as the body.
+await check('без тип каросерия черновата пак получава доказания «Джип»', () => {
+  // `category` is mandatory on Mobile.bg's side — a publish without it was
+  // refused with {"fields":["category"]}. The fallback keeps the run sendable
+  // instead of omitting the parameter.
   const readiness = checkReadiness({ fields: fullFields, extras: [], images: oneImage, hasCredentials: true, category: 'Автомобили и джипове' });
   assert.equal(readiness.ready, true);
-  assert.equal(readiness.payload.params.category, undefined);
-  assert.ok(readiness.issues.some(issue => issue.code === 'CATEGORY' && issue.message.includes('каросерия')));
+  assert.equal(readiness.payload.params.category, 'Джип');
+  assert.ok(!readiness.issues.some(issue => issue.code === 'CATEGORY'));
 });
 
 await check('липсващи задължителни полета спират изпращането', () => {

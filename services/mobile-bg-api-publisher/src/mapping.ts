@@ -139,15 +139,21 @@ export const BODY_LABELS: Record<string, string> = {
   sedan: 'Седан',
 };
 
-// Settles the body type the same way the browser publisher does, so the two
-// transports agree on `category`. Only values the dictionary lists are returned.
-export function bodyToCategory(body: string | null | undefined, make?: string | null): string | null {
+// Settles the body type the same way the reference transcript does, so the two
+// transports agree on `category`. Only values the dictionary lists are returned,
+// and the chain always settles on one of them.
+export function bodyToCategory(body: string | null | undefined, make?: string | null): string {
   const key = (body || '').trim();
   if (key && key !== 'other' && BODY_LABELS[key]) return BODY_LABELS[key];
   const brand = (make || '').trim();
   if (brand === 'Mercedes-Benz') return 'Седан';
   if (brand === 'Dodge' || brand === 'RAM') return 'Пикап';
-  return null;
+  // Mobile.bg requires `category`, and no draft has ever carried a body value,
+  // so returning nothing meant the parameter was never sent and the publish was
+  // refused with `{"fields":["category"]}`. The reference transcript of a real
+  // successful publication ends this same chain with «Джип», so the fallback is
+  // the observed value, not a guess.
+  return 'Джип';
 }
 
 // `engine_cubature` is cubic centimetres; the draft stores litres.
@@ -309,12 +315,8 @@ export function buildPayload(
 
   const body = options.body || values.get('body') || null;
   const category = bodyToCategory(body, values.get('make'));
-  if (category) {
-    params.category = category;
-    mapped.push({ field_key: 'body', api_key: 'category', value: category, confirmed: true, label: 'Тип каросерия' });
-  } else {
-    warnings.push('Типът каросерия (category) не е определен; Mobile.bg може да го изисква. Провери преди публикуване.');
-  }
+  params.category = category;
+  mapped.push({ field_key: 'body', api_key: 'category', value: category, confirmed: true, label: 'Тип каросерия' });
 
   params.term = String(options.term ?? Number(process.env.MOBILE_BG_API_TERM || 49));
 
