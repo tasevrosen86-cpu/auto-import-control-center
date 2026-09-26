@@ -416,13 +416,61 @@ if (ids.length > 0) {
   const advert = loaded.body && typeof loaded.body === 'object' ? (loaded.body.advert ?? loaded.body) : null;
   if (advert && typeof advert === 'object') {
     // Printed as a table, so the exact stored value of each field is readable.
+    // Non-scalars are shown too, since `extri` is expected to be a list.
     for (const [field, value] of Object.entries(advert)) {
-      if (value === null || value === undefined || typeof value === 'object') continue;
-      console.log('  ' + String(field).padEnd(22) + ' = ' + scrub(String(value)).slice(0, 120));
+      const shown = value && typeof value === 'object' ? JSON.stringify(value) : String(value ?? '');
+      console.log('  ' + String(field).padEnd(22) + ' = ' + scrub(shown).slice(0, 140));
     }
     console.log('\n  суров JSON:', scrub(JSON.stringify(advert)).slice(0, 4000));
   } else {
     printRaw(loaded, 2000);
+  }
+
+  // A single advert only shows what that one listing sent. A spread of them
+  // shows what this dealership sends every time, which is what settles a field
+  // whose codes carry no labels: `price_dds` offers 1, 2 and 3 and nothing says
+  // which is which, but the value used across the whole lot is the one meant.
+  const sample = ids.slice(0, 30);
+  const tally = {};
+  for (const id of sample) {
+    const one = await call('GET', `/import_api/advertload/${token}/?ida=${encodeURIComponent(id)}`);
+    const row = one.body && typeof one.body === 'object' ? (one.body.advert ?? one.body) : null;
+    if (!row || typeof row !== 'object') continue;
+    for (const field of ['price_dds', 'nup', 'category', 'term', 'euroclass', 'engine_cubature',
+                         'engine_power', 'locat', 'locatc', 'currency', 'engine_type', 'extri']) {
+      const value = row[field] === undefined ? '(липсва)' : String(row[field] ?? '');
+      tally[field] = tally[field] || {};
+      tally[field][value] = (tally[field][value] || 0) + 1;
+    }
+  }
+  console.log(`\n  ### разпределение на стойностите в ${sample.length} обяви (най-честите):`);
+  for (const [field, counts] of Object.entries(tally)) {
+    const top = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 5)
+      .map(([value, count]) => `${JSON.stringify(value.slice(0, 32))}×${count}`).join('   ');
+    console.log('    ' + field.padEnd(18) + top);
+  }
+
+  // The public advert page spells the VAT wording out, which is what the
+  // unlabelled `price_dds` codes stand for. A plain read-only page fetch.
+  heading('ПУБЛИЧНА СТРАНИЦА НА ОБЯВАТА (read-only)');
+  for (const url of [`https://www.mobile.bg/obiava-${ids[0]}`, `https://www.mobile.bg/obiava-${ids[0]}/`]) {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(30000), headers: BROWSER_HEADERS });
+      const html = await response.text();
+      const text = html.replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/\s+/g, ' ');
+      console.log(`\n  ${url}  HTTP ${response.status}  дължина ${html.length}`);
+      for (const term of ['ДДС', 'данъчен', 'Освободена', 'Частна продажба']) {
+        const index = text.indexOf(term);
+        if (index < 0) { console.log(`      «${term}»: не е намерен`); continue; }
+        console.log(`      «${term}»: ` + text.slice(Math.max(0, index - 250), index + 250));
+      }
+    } catch (cause) {
+      console.log(`  ${url}  грешка:`, cause instanceof Error ? cause.message : String(cause));
+    }
   }
 }
 
