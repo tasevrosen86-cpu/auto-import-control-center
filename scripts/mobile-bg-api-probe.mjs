@@ -286,6 +286,12 @@ if (typeof doc.body === 'string' && doc.body.length > 0) {
         if (index < 0) { console.log(`      «${term}»: не е намерен`); continue; }
         console.log(`      «${term}» на ${index}: ` + code.slice(Math.max(0, index - 500), index + 1200).replace(/\s+/g, ' '));
       }
+      // The data file is small enough to print in full, and it is the only place
+      // the field descriptions live, so it is dumped rather than searched.
+      if (/api_data\.js$/i.test(script)) {
+        console.log('\n  ### ЦЕЛИЯТ api_data.js:');
+        console.log(code);
+      }
     } catch (cause) {
       console.log(`\n  ### скрипт ${url}  грешка:`, cause instanceof Error ? cause.message : String(cause));
     }
