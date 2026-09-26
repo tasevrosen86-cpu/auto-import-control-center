@@ -57,9 +57,9 @@ function scrub(value) {
 }
 
 async function call(method, path, options = {}) {
-  const init = { method, signal: AbortSignal.timeout(30000) };
+  const init = { method, signal: AbortSignal.timeout(30000), headers: { ...(options.headers || {}) } };
   if (options.form) {
-    init.headers = { 'content-type': 'application/x-www-form-urlencoded' };
+    init.headers['content-type'] = 'application/x-www-form-urlencoded';
     init.body = new URLSearchParams(options.form).toString();
   }
   try {
@@ -182,7 +182,7 @@ if (catfields.body && typeof catfields.body === 'object' && !Array.isArray(catfi
 // --- dictionaries ----------------------------------------------------------
 // Every list field in the minimal payload, plus the three the API named as
 // wrong, so a single run answers all of them.
-const listFields = ['nup', 'category', 'price_dds', 'marka', 'month', 'year', 'engine_type', 'transmission', 'color', 'locat', 'locatc', 'currency', 'euroclass', 'rub', 'term'];
+const listFields = ['nup', 'category', 'price_dds', 'marka', 'month', 'year', 'engine_type', 'transmission', 'color', 'locat', 'locatc', 'currency', 'euroclass', 'rub', 'term', 'extri', 'topmenu'];
 const collected = {};
 
 const wholeCategory = await call('GET', '/import_api/dictionary/1/1/');
@@ -214,6 +214,76 @@ for (const make of ['Audi', 'Hyundai']) {
   collected[`model:${make}`] = describeDictionary(`model?marka=${make}`, result);
 }
 
+// --- documentation ---------------------------------------------------------
+// The docs publish one worked example body and describe each parameter. They
+// answer the two things a dictionary cannot: `price_dds` has numeric options
+// with no labels, and `extinfo` may or may not be the description. The page is
+// fetched here rather than read from the repository because it is served only
+// to the VPS network.
+heading('ДОКУМЕНТАЦИЯ /import_doc/');
+let doc = { status: null, body: '' };
+const BROWSER_HEADERS = {
+  'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+  'accept': 'text/html,application/xhtml+xml',
+  'accept-language': 'bg,en;q=0.9',
+};
+for (const path of ['/import_doc/', '/import_doc', '/import_api/']) {
+  for (const [mode, options] of [['plain', {}], ['browser', { headers: BROWSER_HEADERS }]]) {
+    const attempt = await call('GET', path, options);
+    const length = typeof attempt.body === 'string' ? attempt.body.length : 0;
+    console.log(`  ${path.padEnd(16)} ${mode.padEnd(8)} HTTP ${attempt.status}  дължина ${length}`);
+    if (attempt.status === 200 && length > 2000) { doc = attempt; break; }
+    if (attempt.status === 200 && length > (typeof doc.body === 'string' ? doc.body.length : 0)) doc = attempt;
+  }
+  if (typeof doc.body === 'string' && doc.body.length > 2000) break;
+}
+console.log('използван документ, дължина:', typeof doc.body === 'string' ? doc.body.length : 0);
+
+if (typeof doc.body === 'string' && doc.body.length > 0) {
+  const text = doc.body
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li|tr|h[1-6]|pre)>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n\s*\n+/g, '\n');
+  console.log('дължина на текста:', text.length);
+
+  // The whole page is long, so the parts that matter are pulled out by term.
+  for (const term of ['price_dds', 'extinfo', 'nup', 'category', 'locatc', 'term', 'extri',
+                      'описание', 'Допълнителна', 'engine_power', 'engine_cubature', 'ДДС', 'Заглавие']) {
+    const hits = [];
+    const lines = text.split('\n');
+    lines.forEach((line, index) => {
+      if (line.toLowerCase().includes(term.toLowerCase())) {
+        hits.push(`      ${lines.slice(Math.max(0, index - 1), index + 3).join(' ⏎ ').slice(0, 400)}`);
+      }
+    });
+    console.log(`\n  ### споменавания на «${term}»: ${hits.length}`);
+    for (const hit of hits.slice(0, 6)) console.log(hit);
+  }
+
+  // The example body is what proves which parameter names are real.
+  const exampleStart = text.search(/advertpub/i);
+  if (exampleStart >= 0) {
+    console.log('\n  ### около «advertpub»:');
+    console.log(text.slice(exampleStart, exampleStart + 2500).split('\n').map(line => '      ' + line).join('\n'));
+  }
+
+  // The full text, so nothing that matters is missed by a search term.
+  console.log('\n  ### ЦЕЛИЯТ ТЕКСТ НА ДОКУМЕНТА:');
+  console.log(text.slice(0, 20000).split('\n').map(line => '      ' + line).join('\n'));
+} else {
+  printRaw(doc, 800);
+}
+
 // --- our values ------------------------------------------------------------
 // The exact strings from draft ede5e898 (Audi Q7, job cae12df8) and draft
 // 31e70aed (Hyundai TUCSON, job ac4f218d), so the comparison is against what
@@ -237,6 +307,22 @@ compare('locat "Извън страната"', 'Извън страната', (c
 compare('locatc "Канада"', 'Канада', (collected.locatc || {}).values, (collected.locatc || {}).labels);
 compare('currency "EUR"', 'EUR', (collected.currency || {}).values, (collected.currency || {}).labels);
 compare('euroclass ← euro_standard "Euro 6"', 'Euro 6', (collected.euroclass || {}).values, (collected.euroclass || {}).labels);
+
+// The values the worker actually puts on the wire, after VALUE_ALIASES. The
+// drafts hold `Бензин` and `Април`, but the alias turns them into `Бензинов`
+// and `април` before the request, so those are what has to match.
+console.log('\n\n############ РЕАЛНО ИЗПРАТЕНИТЕ СТОЙНОСТИ (СЛЕД ALIAS) ############');
+compare('engine_type ← fuel "Бензин" → alias "Бензинов"', 'Бензинов', (collected.engine_type || {}).values, (collected.engine_type || {}).labels);
+compare('month ← month "Април" → alias "април"', 'април', (collected.month || {}).values, (collected.month || {}).labels);
+compare('nup ← condition "Използван" → alias "Употребяван"', 'Употребяван', (collected.nup || {}).values, (collected.nup || {}).labels);
+compare('nup ← предложение "0" (optval за Употребяван)', '0', (collected.nup || {}).values, (collected.nup || {}).labels);
+compare('category ← предложение "Джип"', 'Джип', (collected.category || {}).values, (collected.category || {}).labels);
+compare('price_dds ← предложение "1"', '1', (collected.price_dds || {}).values, (collected.price_dds || {}).labels);
+compare('euroclass ← предложение "6"', '6', (collected.euroclass || {}).values, (collected.euroclass || {}).labels);
+compare('extri ← "4(5) Врати"', '4(5) Врати', (collected.extri || {}).values, (collected.extri || {}).labels);
+compare('extri ← "7 места"', '7 места', (collected.extri || {}).values, (collected.extri || {}).labels);
+compare('extri ← "4x4"', '4x4', (collected.extri || {}).values, (collected.extri || {}).labels);
+compare('topmenu ← "1"', '1', (collected.topmenu || {}).values, (collected.topmenu || {}).labels);
 
 // --- logout ----------------------------------------------------------------
 heading('ИЗХОД');
