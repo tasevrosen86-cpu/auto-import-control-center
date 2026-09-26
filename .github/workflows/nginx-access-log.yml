@@ -1,0 +1,77 @@
+name: Nginx access log
+
+# Manual, read-only. Prints the tail of the production nginx access log so the
+# requests Mobile.bg makes for our pictures can be seen: whether it asks for
+# them at all, the exact path, the status and the user agent.
+#
+# It connects with the same secrets and the same user/host/port the deploy
+# workflow already uses, and it runs nothing but `tail` on two log files. No
+# service is restarted, no file is written, no secret is printed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      lines:
+        description: 'Колко реда от access.log'
+        required: false
+        default: '500'
+        type: string
+      filter:
+        description: 'Само редове, съдържащи този текст (празно = всички)'
+        required: false
+        default: 'mobilebg-pictures'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  logs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.VPS_SSH_KEY }}
+
+      - name: Trust VPS host
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Read the nginx logs
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || 22 }}
+          LINES: ${{ inputs.lines }}
+          FILTER: ${{ inputs.filter }}
+        run: |
+          ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            "LINES='$LINES' FILTER='$FILTER' bash -s" <<'REMOTE' 2>&1 || true
+          set -u
+          echo "############ ACCESS LOG ############"
+          echo "редове: $LINES | филтър: ${FILTER:-няма}"
+          echo
+          if sudo test -f /var/log/nginx/access.log; then
+            echo "--- последни $LINES реда$([ -n "$FILTER" ] && echo ", филтрирани по „$FILTER“") ---"
+            if [ -n "$FILTER" ]; then
+              sudo tail -n "$LINES" /var/log/nginx/access.log | grep -F "$FILTER" || echo "(няма съвпадащи редове)"
+            else
+              sudo tail -n "$LINES" /var/log/nginx/access.log
+            fi
+            echo
+            echo "--- обобщение по статус и път (от последните $LINES реда) ---"
+            sudo tail -n "$LINES" /var/log/nginx/access.log \
+              | awk '{print $9, $7}' | sort | uniq -c | sort -rn | head -30
+          else
+            echo "::warning::/var/log/nginx/access.log не е намерен."
+          fi
+          echo
+          echo "############ ERROR LOG ############"
+          if sudo test -f /var/log/nginx/error.log; then
+            sudo tail -n 200 /var/log/nginx/error.log
+          else
+            echo "(няма error.log)"
+          fi
+          REMOTE
