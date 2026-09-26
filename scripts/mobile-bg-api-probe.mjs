@@ -82,65 +82,65 @@ function printRaw(result, limit = 1500) {
   console.log(scrub(result.body).slice(0, limit));
 }
 
-// The shape of `dictionary` is not documented, so every scalar is collected:
-// whether the API keys by id, by label, or nests one inside the other, the
-// comparison below still has something to match against.
-function scalars(node, depth = 0, out = []) {
-  if (depth > 6 || node === null || node === undefined) return out;
-  if (Array.isArray(node)) { node.forEach(item => scalars(item, depth + 1, out)); return out; }
-  if (typeof node === 'object') {
-    for (const [key, value] of Object.entries(node)) { out.push(String(key)); scalars(value, depth + 1, out); }
-    return out;
-  }
-  out.push(String(node));
-  return out;
-}
-
-// Dumps a dictionary in a readable one-row-per-entry form when it looks like a
-// map of id -> label, and falls back to raw JSON when it does not.
+// A dictionary answers `{ "<field>": [ { optval, opttext }, ... ] }`, where
+// `optval` is what has to be sent and `opttext` is only the label shown on the
+// site. The two are easy to confuse and the difference is the whole bug, so
+// they are printed as a pair, and `optval` alone is what the comparison uses.
 function describeDictionary(label, result) {
   heading(`DICTIONARY ${label}`);
   console.log('HTTP', result.status);
   const body = result.body;
-  if (!body || typeof body !== 'object') { printRaw(result); return []; }
+  if (!body || typeof body !== 'object') { printRaw(result); return { values: [], labels: [] }; }
 
-  const entries = Array.isArray(body) ? body.map(item => [null, item]) : Object.entries(body);
-  const rows = [];
-  for (const [key, value] of entries) {
-    if (value && typeof value === 'object' && !Array.isArray(value)) {
-      rows.push({ id: key ?? value.id ?? value.value ?? null, label: value.ftext ?? value.name ?? value.label ?? value.value ?? null });
-    } else {
-      rows.push({ id: key, label: value });
+  const values = [];
+  const labels = [];
+  for (const [field, entries] of Object.entries(body)) {
+    const list = Array.isArray(entries) ? entries : [entries];
+    console.log(`  поле: ${field}  (записи: ${list.length})`);
+    for (const entry of list) {
+      if (entry && typeof entry === 'object') {
+        const value = entry.optval ?? entry.value ?? entry.id ?? null;
+        const text = entry.opttext ?? entry.ftext ?? entry.name ?? entry.label ?? '';
+        console.log('    optval=' + String(value ?? '').padEnd(10) + 'opttext=' + String(text));
+        if (value !== null && value !== undefined) values.push(String(value));
+        if (text) labels.push(String(text));
+      } else {
+        console.log('    ' + String(entry));
+        values.push(String(entry));
+      }
     }
   }
-  for (const row of rows) {
-    console.log('  ' + String(row.id ?? '').padEnd(14) + String(row.label ?? ''));
-  }
-  console.log('общо записи:', rows.length);
-  if (rows.length === 0) printRaw(result);
-  return scalars(body);
+  if (values.length === 0 && labels.length === 0) printRaw(result);
+  return { values, labels };
 }
 
-// Reports whether our exact value is one the API itself offers, and if not,
-// what the closest thing it does offer is. The distinction matters: a value
-// that is absent is a rejected value, while a value present under a slightly
-// different wording is a translation bug on our side. When nothing matches, the
-// dictionary's own entries are printed, because that list is the answer.
-function compare(label, ours, options) {
+// Reports whether our exact value is one the API itself accepts. The
+// distinction that matters is `optval` versus `opttext`: `optval` is the value
+// `advertpub` validates, while `opttext` is only the label rendered on the site.
+// A value that matches an `opttext` but no `optval` is exactly the shape of a
+// rejected field, so that case is called out separately rather than as a hit.
+function compare(label, ours, options, labels) {
   console.log(`\n----- ${label} -----`);
   console.log('  наша стойност:', JSON.stringify(ours));
-  if (!options || options.length === 0) { console.log('  речникът е празен или неразчетен'); return; }
-  const exact = options.includes(ours);
+  const values = options || [];
+  const texts = labels || [];
+  if (values.length === 0 && texts.length === 0) { console.log('  речникът е празен или неразчетен'); return; }
+
   const lower = String(ours).toLowerCase();
-  const caseOnly = options.find(option => option.toLowerCase() === lower);
-  const partial = options.find(option => option.toLowerCase().includes(lower) || lower.includes(option.toLowerCase()));
-  if (exact) console.log('  ✅ ТОЧНО съвпадение в речника');
-  else if (caseOnly) console.log('  ⚠ съвпадение само по регистър:', JSON.stringify(caseOnly));
-  else if (partial) console.log('  ⚠ частично съвпадение:', JSON.stringify(partial));
-  else console.log('  ❌ НЯМА съвпадение — стойността се отхвърля');
-  if (!exact) {
-    const candidates = [...new Set(options)].filter(value => value.length > 1).slice(0, 40);
-    console.log('  речникът предлага:', candidates.length ? JSON.stringify(candidates) : '(няма многосимволни стойности)');
+  const valueHit = values.includes(ours);
+  const valueCaseOnly = values.find(value => value.toLowerCase() === lower);
+  const labelHit = texts.includes(ours);
+  const labelCaseOnly = texts.find(text => text.toLowerCase() === lower);
+
+  if (valueHit) console.log('  ✅ приема се: съвпада с optval');
+  else if (valueCaseOnly) console.log('  ⚠ съвпада с optval само по регистър:', JSON.stringify(valueCaseOnly));
+  else if (labelHit) console.log('  ❌ ОТХВЪРЛЯ СЕ: съвпада само с opttext (етикет), не с optval');
+  else if (labelCaseOnly) console.log('  ❌ ОТХВЪРЛЯ СЕ: съвпада с opttext само по регистър:', JSON.stringify(labelCaseOnly));
+  else console.log('  ❌ ОТХВЪРЛЯ СЕ: няма нито optval, нито opttext');
+
+  if (!valueHit) {
+    const pairs = values.map((value, index) => `${value}=${texts[index] ?? ''}`);
+    console.log('  optval=opttext:', pairs.length ? JSON.stringify(pairs) : '(няма)');
   }
 }
 
@@ -199,6 +199,11 @@ for (const field of listFields) {
     if (withToken.status === 200 && withToken.body && typeof withToken.body === 'object') result = withToken;
   }
   collected[field] = describeDictionary(field, result);
+  // The three fields the API named as wrong are also printed raw: the exact
+  // shape matters, and a rendering can hide an unexpected nesting.
+  if (['nup', 'category', 'price_dds'].includes(field)) {
+    console.log('  суров JSON:', scrub(result.body).slice(0, 1200));
+  }
 }
 
 // --- model -----------------------------------------------------------------
@@ -214,24 +219,24 @@ for (const make of ['Audi', 'Hyundai']) {
 // 31e70aed (Hyundai TUCSON, job ac4f218d), so the comparison is against what
 // was really sent rather than a reconstruction.
 console.log('\n\n############ СРАВНЕНИЕ С ИЗПРАТЕНИТЕ СТОЙНОСТИ ############');
-compare('nup ← condition "Употребяван" (изпратено)', 'Употребяван', collected.nup);
-compare('nup ← condition "Използван" (в черновата)', 'Използван', collected.nup);
-compare('category ← чернова "Автомобили и джипове" (НЕ се изпраща)', 'Автомобили и джипове', collected.category);
-compare('category ← "1" (topmenu)', '1', collected.category);
-compare('price_dds ← vat_included "Цената е с включено ДДС" (пращаме като dds)', 'Цената е с включено ДДС', collected.price_dds);
-compare('marka "Audi"', 'Audi', collected.marka);
-compare('marka "Hyundai"', 'Hyundai', collected.marka);
-compare('model "Q7" (Audi)', 'Q7', collected['model:Audi']);
-compare('model "TUCSON" (Hyundai)', 'TUCSON', collected['model:Hyundai']);
-compare('month "Април"', 'Април', collected.month);
-compare('year "2025"', '2025', collected.year);
-compare('engine_type "Бензин"', 'Бензин', collected.engine_type);
-compare('transmission "Автоматична"', 'Автоматична', collected.transmission);
-compare('color "Черен"', 'Черен', collected.color);
-compare('locat "Извън страната"', 'Извън страната', collected.locat);
-compare('locatc "Канада"', 'Канада', collected.locatc);
-compare('currency "EUR"', 'EUR', collected.currency);
-compare('euroclass ← euro_standard "Euro 6"', 'Euro 6', collected.euroclass);
+compare('nup ← condition "Употребяван" (изпратено)', 'Употребяван', (collected.nup || {}).values, (collected.nup || {}).labels);
+compare('nup ← condition "Използван" (в черновата)', 'Използван', (collected.nup || {}).values, (collected.nup || {}).labels);
+compare('category ← чернова "Автомобили и джипове" (НЕ се изпраща)', 'Автомобили и джипове', (collected.category || {}).values, (collected.category || {}).labels);
+compare('category ← "1" (topmenu)', '1', (collected.category || {}).values, (collected.category || {}).labels);
+compare('price_dds ← vat_included "Цената е с включено ДДС" (пращаме като dds)', 'Цената е с включено ДДС', (collected.price_dds || {}).values, (collected.price_dds || {}).labels);
+compare('marka "Audi"', 'Audi', (collected.marka || {}).values, (collected.marka || {}).labels);
+compare('marka "Hyundai"', 'Hyundai', (collected.marka || {}).values, (collected.marka || {}).labels);
+compare('model "Q7" (Audi)', 'Q7', (collected['model:Audi'] || {}).values, (collected['model:Audi'] || {}).labels);
+compare('model "TUCSON" (Hyundai)', 'TUCSON', (collected['model:Hyundai'] || {}).values, (collected['model:Hyundai'] || {}).labels);
+compare('month "Април"', 'Април', (collected.month || {}).values, (collected.month || {}).labels);
+compare('year "2025"', '2025', (collected.year || {}).values, (collected.year || {}).labels);
+compare('engine_type "Бензин"', 'Бензин', (collected.engine_type || {}).values, (collected.engine_type || {}).labels);
+compare('transmission "Автоматична"', 'Автоматична', (collected.transmission || {}).values, (collected.transmission || {}).labels);
+compare('color "Черен"', 'Черен', (collected.color || {}).values, (collected.color || {}).labels);
+compare('locat "Извън страната"', 'Извън страната', (collected.locat || {}).values, (collected.locat || {}).labels);
+compare('locatc "Канада"', 'Канада', (collected.locatc || {}).values, (collected.locatc || {}).labels);
+compare('currency "EUR"', 'EUR', (collected.currency || {}).values, (collected.currency || {}).labels);
+compare('euroclass ← euro_standard "Euro 6"', 'Euro 6', (collected.euroclass || {}).values, (collected.euroclass || {}).labels);
 
 // --- logout ----------------------------------------------------------------
 heading('ИЗХОД');
