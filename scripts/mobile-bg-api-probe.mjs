@@ -388,6 +388,44 @@ compare('extri ← "7 места"', '7 места', (collected.extri || {}).valu
 compare('extri ← "4x4"', '4x4', (collected.extri || {}).values, (collected.extri || {}).labels);
 compare('topmenu ← "1"', '1', (collected.topmenu || {}).values, (collected.topmenu || {}).labels);
 
+// --- a real published advert -----------------------------------------------
+// The dictionaries say which values are legal; an advert that Mobile.bg already
+// accepted says which values this dealership actually sends, under the names the
+// API stores. That is the only way to settle `price_dds`, whose three numeric
+// options carry no labels, and `extinfo`, which the documentation never names.
+// `adverts` lists the ids and `advertload` reads one: both are GETs, and neither
+// creates, changes or removes anything.
+heading('РЕАЛНА ПУБЛИКУВАНА ОБЯВА (read-only)');
+const adverts = await call('GET', `/import_api/adverts/${token}/`);
+console.log('HTTP', adverts.status);
+const ids = [];
+if (adverts.body && typeof adverts.body === 'object') {
+  const list = adverts.body.adverts ?? adverts.body.advert ?? [];
+  for (const item of Array.isArray(list) ? list : [list]) {
+    const id = item && typeof item === 'object' ? (item.ida ?? item.id) : item;
+    if (id) ids.push(String(id));
+  }
+  console.log('обяви в автокъщата:', ids.length, ids.length ? '(първите 5: ' + ids.slice(0, 5).join(', ') + ')' : '');
+} else {
+  printRaw(adverts, 600);
+}
+
+if (ids.length > 0) {
+  const loaded = await call('GET', `/import_api/advertload/${token}/?ida=${encodeURIComponent(ids[0])}&pretty=1`);
+  console.log('HTTP', loaded.status, 'за ida', ids[0]);
+  const advert = loaded.body && typeof loaded.body === 'object' ? (loaded.body.advert ?? loaded.body) : null;
+  if (advert && typeof advert === 'object') {
+    // Printed as a table, so the exact stored value of each field is readable.
+    for (const [field, value] of Object.entries(advert)) {
+      if (value === null || value === undefined || typeof value === 'object') continue;
+      console.log('  ' + String(field).padEnd(22) + ' = ' + scrub(String(value)).slice(0, 120));
+    }
+    console.log('\n  суров JSON:', scrub(JSON.stringify(advert)).slice(0, 4000));
+  } else {
+    printRaw(loaded, 2000);
+  }
+}
+
 // --- logout ----------------------------------------------------------------
 heading('ИЗХОД');
 const logout = await call('POST', `/import_api/logout/${token}/`);
