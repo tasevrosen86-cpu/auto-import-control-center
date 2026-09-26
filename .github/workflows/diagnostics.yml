@@ -127,3 +127,60 @@ jobs:
           PUBLISHER_DIR="/home/ubuntu/auto-import-control-center/services/mobile-publisher"
           node -e "console.log('    ' + require('$PUBLISHER_DIR/node_modules/playwright/package.json').version)" 2>/dev/null || echo "    (не може да се прочете)"
           REMOTE
+
+  # Reads the schema and the option lists the API validates against, and compares
+  # them with the exact values the two failing drafts sent. api.mobile.bg answers
+  # the CI network with a Cloudflare 403, so this runs on the VPS. It calls
+  # login -> catfields -> dictionary -> logout: `advertpub` and `advertpicts` are
+  # never called, so no listing is created and nothing is billed.
+  api-schema:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.VPS_SSH_KEY }}
+
+      - name: Trust VPS host
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Upload the probe
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || 22 }}
+        run: |
+          scp -P "$VPS_PORT" scripts/mobile-bg-api-probe.mjs "$VPS_USER@$VPS_HOST:/tmp/mobile-bg-api-probe.mjs"
+
+      - name: Probe the Mobile.bg API schema
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || 22 }}
+        run: |
+          # The env file is mode 600 and holds the API password, so it is read by
+          # root in place. Node is resolved to an absolute path as this user so
+          # root's PATH cannot fail the run, and no secret is copied anywhere.
+          ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" 'bash -s' <<'REMOTE' 2>&1 | sed -E \
+            -e 's/[0-9a-fA-F]{32}/<token>/g' \
+            -e 's/eyJ[A-Za-z0-9._-]{10,}/<key>/g' \
+            -e 's#/home/[a-z][a-z0-9_-]*#/home/<user>#g' \
+            -e 's/[0-9]{1,3}(\.[0-9]{1,3}){3}/<ip>/g' \
+            || true
+          set -u
+          ENVF=/etc/aicc-mobile-bg-api.env
+          if ! sudo test -f "$ENVF"; then
+            echo "::error::$ENVF липсва на сървъра."
+            exit 1
+          fi
+          NODE_BIN="$(command -v node)"
+          if [ -z "$NODE_BIN" ]; then echo "::error::node не е намерен на сървъра."; exit 1; fi
+          echo "node: $($NODE_BIN --version)"
+          sudo "$NODE_BIN" /tmp/mobile-bg-api-probe.mjs "$ENVF"
+          rm -f /tmp/mobile-bg-api-probe.mjs
+          REMOTE
