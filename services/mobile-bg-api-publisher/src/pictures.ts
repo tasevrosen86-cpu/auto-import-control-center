@@ -235,6 +235,14 @@ export function pictureUrl(baseUrl: string, picture: PreparedPicture): string {
   return `${base}${picture.path.startsWith('/') ? '' : '/'}${picture.path}`;
 }
 
+// TEMPORARY EXPERIMENT: the value sent in `picts` is the same URL without its
+// scheme, i.e. host + path. Kept apart from pictureUrl so the reachability check
+// keeps using the real https:// URL, which is what a HEAD request needs.
+export function pictsValue(baseUrl: string, picture: PreparedPicture): string {
+  const host = baseUrl.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+  return `${host}${picture.path.startsWith('/') ? '' : '/'}${picture.path}`;
+}
+
 // Verifies a prepared file is publicly readable at the URL that will be sent.
 // A file written but not served — wrong root, blocked extension, missing
 // permission — would make Mobile.bg fail with a message that names no cause, so

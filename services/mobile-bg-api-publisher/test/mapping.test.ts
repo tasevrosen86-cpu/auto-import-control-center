@@ -13,7 +13,7 @@ import {
 } from '../src/mapping.ts';
 import { checkReadiness, summarizeReadiness } from '../src/readiness.ts';
 import { resolvePictureListingId } from '../src/publish-id.ts';
-import { isJpeg, extensionOf, isAcceptableFilename, preparePictures, pictureUrl } from '../src/pictures.ts';
+import { isJpeg, extensionOf, isAcceptableFilename, preparePictures, pictureUrl, pictsValue } from '../src/pictures.ts';
 
 type StubResponse = { status: number; body: unknown };
 
@@ -647,6 +647,31 @@ await check('груповата заявка подава пълни URL-и, р�
     'всяка снимка е пълен URL',
   );
   assert.equal(joined.split('~').length, 2, 'разделител е ~');
+});
+
+await check('ТЕСТ: picts се подава с домейн, но без схема', () => {
+  const picture = {
+    filename: 'image-1.jpg',
+    path: '/mobilebg-pictures/27053a12-2601-4842-bcbc-ea584af46887/image-1.jpg',
+    source_url: '',
+    bytes: 1,
+    converted_from: null,
+    is_main: true,
+  };
+  const sent = pictsValue('https://autoimportcontrolcenter.biz', picture);
+  assert.equal(
+    sent,
+    'autoimportcontrolcenter.biz/mobilebg-pictures/27053a12-2601-4842-bcbc-ea584af46887/image-1.jpg',
+    'точно този формат се изпраща в момента',
+  );
+  assert.ok(!sent.includes('://'), 'без схема');
+  assert.ok(sent.includes('autoimportcontrolcenter.biz'), 'с домейн');
+  // The reachability check must keep using the real https URL.
+  assert.equal(
+    pictureUrl('https://autoimportcontrolcenter.biz', picture),
+    'https://autoimportcontrolcenter.biz/mobilebg-pictures/27053a12-2601-4842-bcbc-ea584af46887/image-1.jpg',
+    'HEAD проверката ползва https',
+  );
 });
 
 // ------------------------------------------------------- listing id for pictures

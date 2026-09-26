@@ -27,7 +27,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { MobileBgApiClient, MobileBgApiError, trimTrace, type TraceEntry } from './client.js';
 import { resolvePictureListingId } from './publish-id.js';
-import { preparePictures, verifyPubliclyReadable, pictureUrl, type SourceImage } from './pictures.js';
+import { preparePictures, verifyPubliclyReadable, pictureUrl, pictsValue, type SourceImage } from './pictures.js';
 import { checkReadiness, summarizeReadiness } from './readiness.js';
 import { EXTRI_SEPARATOR } from './mapping.js';
 import { intersectWithCatfields, readCatfields } from './mapping.js';
@@ -285,10 +285,10 @@ async function runJob(job: Job): Promise<void> {
 
         // One call adds all of them: the API takes up to 17 names separated by
         // `~`, and splitting them into 17 calls would multiply the failure
-        // surface for no benefit. Each entry is the full public URL, because
-        // Mobile.bg downloads the file itself and a bare path would be resolved
-        // against its own host instead of ours.
-        const upload = await client.advertPicts(ida, 'add', { picts: sendable.map(picture => pictureUrl(pictureBaseUrl, picture)).join('~') });
+        // surface for no benefit. TEMPORARY EXPERIMENT: each entry is host plus
+        // path, with no scheme, to see whether Mobile.bg accepts a domain-qualified
+        // value at all.
+        const upload = await client.advertPicts(ida, 'add', { picts: sendable.map(picture => pictsValue(pictureBaseUrl, picture)).join('~') });
         trace.push(...client.trace.splice(0, client.trace.length));
         if (upload.ok) {
           uploaded = sendable.length;
@@ -303,7 +303,7 @@ async function runJob(job: Job): Promise<void> {
             // Seventeen sequential calls can outlast the token, so it is
             // re-issued as the loop runs rather than only once before it.
             await ensureFreshToken();
-            const one = await client.advertPicts(ida, 'add', { picts: pictureUrl(pictureBaseUrl, picture) });
+            const one = await client.advertPicts(ida, 'add', { picts: pictsValue(pictureBaseUrl, picture) });
             trace.push(...client.trace.splice(0, client.trace.length));
             pictureResults.push({ path: picture.path, url: pictureUrl(pictureBaseUrl, picture), ok: one.ok, reason: one.ok ? null : one.error });
             if (one.ok) uploaded += 1;
